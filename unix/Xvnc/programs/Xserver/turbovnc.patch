@@ -1,6 +1,19 @@
-diff --git a/xorg-server-1.20.14/Xext/shm.c b/Xserver/Xext/shm.c
+diff --git a/xserver-dbf6d1c24a00a1f598756c71028876ff2b3db17f/Xext/saver.c b/Xserver/Xext/saver.c
+index c23907d..05b9ca3 100644
+--- a/xserver-dbf6d1c24a00a1f598756c71028876ff2b3db17f/Xext/saver.c
++++ b/Xserver/Xext/saver.c
+@@ -1051,7 +1051,7 @@ ScreenSaverSetAttributes(ClientPtr client)
+         pVlist++;
+     }
+     if (pPriv->attr)
+-        FreeScreenAttr(pPriv->attr);
++        FreeResource(pPriv->attr->resource, AttrType);
+     pPriv->attr = pAttr;
+     pAttr->resource = FakeClientID(client->index);
+     if (!AddResource(pAttr->resource, AttrType, (void *) pAttr))
+diff --git a/xserver-dbf6d1c24a00a1f598756c71028876ff2b3db17f/Xext/shm.c b/Xserver/Xext/shm.c
 index 24c6b10..be2be20 100644
---- a/xorg-server-1.20.14/Xext/shm.c
+--- a/xserver-dbf6d1c24a00a1f598756c71028876ff2b3db17f/Xext/shm.c
 +++ b/Xserver/Xext/shm.c
 @@ -1211,7 +1211,7 @@ shm_tmpfile(void)
          "/var/tmp",
@@ -29,9 +42,80 @@ index 24c6b10..be2be20 100644
          char template[PATH_MAX];
          snprintf(template, ARRAY_SIZE(template), "%s/shmfd-XXXXXX", shmdirs[i]);
  #ifdef HAVE_MKOSTEMP
-diff --git a/xorg-server-1.20.14/Xi/xichangehierarchy.c b/Xserver/Xi/xichangehierarchy.c
-index 504defe..ad89a31 100644
---- a/xorg-server-1.20.14/Xi/xichangehierarchy.c
+diff --git a/xserver-dbf6d1c24a00a1f598756c71028876ff2b3db17f/Xext/xtest.c b/Xserver/Xext/xtest.c
+index 38b8012..bf11789 100644
+--- a/xserver-dbf6d1c24a00a1f598756c71028876ff2b3db17f/Xext/xtest.c
++++ b/Xserver/Xext/xtest.c
+@@ -501,10 +501,11 @@ XTestSwapFakeInput(ClientPtr client, xReq * req)
+ 
+     nev = ((req->length << 2) - sizeof(xReq)) / sizeof(xEvent);
+     for (ev = (xEvent *) &req[1]; --nev >= 0; ev++) {
++        int evtype = ev->u.u.type & 0x177;
+         /* Swap event */
+-        proc = EventSwapVector[ev->u.u.type & 0177];
++        proc = EventSwapVector[evtype];
+         /* no swapping proc; invalid event type? */
+-        if (!proc || proc == NotImplemented) {
++        if (!proc || proc == NotImplemented || evtype == GenericEvent) {
+             client->errorValue = ev->u.u.type;
+             return BadValue;
+         }
+diff --git a/xserver-dbf6d1c24a00a1f598756c71028876ff2b3db17f/Xext/xvmain.c b/Xserver/Xext/xvmain.c
+index c520c7d..5f4c174 100644
+--- a/xserver-dbf6d1c24a00a1f598756c71028876ff2b3db17f/Xext/xvmain.c
++++ b/Xserver/Xext/xvmain.c
+@@ -811,8 +811,10 @@ XvdiSelectVideoNotify(ClientPtr client, DrawablePtr pDraw, BOOL onoff)
+         tpn = pn;
+         while (tpn) {
+             if (tpn->client == client) {
+-                if (!onoff)
++                if (!onoff) {
+                     tpn->client = NULL;
++                    FreeResource(tpn->id, XvRTVideoNotify);
++                }
+                 return Success;
+             }
+             if (!tpn->client)
+diff --git a/xserver-dbf6d1c24a00a1f598756c71028876ff2b3db17f/Xi/exevents.c b/Xserver/Xi/exevents.c
+index 659816a..1930089 100644
+--- a/xserver-dbf6d1c24a00a1f598756c71028876ff2b3db17f/Xi/exevents.c
++++ b/Xserver/Xi/exevents.c
+@@ -561,22 +561,25 @@ DeepCopyPointerClasses(DeviceIntPtr from, DeviceIntPtr to)
+                 to->button = calloc(1, sizeof(ButtonClassRec));
+                 if (!to->button)
+                     FatalError("[Xi] no memory for class shift.\n");
++                to->button->numButtons = from->button->numButtons;
+             }
+             else
+                 classes->button = NULL;
+         }
+ 
+         if (from->button->xkb_acts) {
+-            if (!to->button->xkb_acts) {
+-                to->button->xkb_acts = calloc(1, sizeof(XkbAction));
+-                if (!to->button->xkb_acts)
+-                    FatalError("[Xi] not enough memory for xkb_acts.\n");
+-            }
++            size_t maxbuttons = max(to->button->numButtons, from->button->numButtons);
++            to->button->xkb_acts = xnfreallocarray(to->button->xkb_acts,
++                                                   maxbuttons,
++                                                   sizeof(XkbAction));
++            memset(to->button->xkb_acts, 0, maxbuttons * sizeof(XkbAction));
+             memcpy(to->button->xkb_acts, from->button->xkb_acts,
+-                   sizeof(XkbAction));
++                   from->button->numButtons * sizeof(XkbAction));
+         }
+-        else
++        else {
+             free(to->button->xkb_acts);
++            to->button->xkb_acts = NULL;
++        }
+ 
+         memcpy(to->button->labels, from->button->labels,
+                from->button->numButtons * sizeof(Atom));
+diff --git a/xserver-dbf6d1c24a00a1f598756c71028876ff2b3db17f/Xi/xichangehierarchy.c b/Xserver/Xi/xichangehierarchy.c
+index 504defe..cb0c6df 100644
+--- a/xserver-dbf6d1c24a00a1f598756c71028876ff2b3db17f/Xi/xichangehierarchy.c
 +++ b/Xserver/Xi/xichangehierarchy.c
 @@ -140,7 +140,7 @@ add_master(ClientPtr client, xXIAddMasterInfo * c, int flags[MAXDEVICES])
  {
@@ -69,37 +153,531 @@ index 504defe..ad89a31 100644
          XIBarrierRemoveMasterDevice(clients[i], ptr->id);
  
      /* disable the remove the devices, XTest devices must be done first
-diff --git a/xorg-server-1.20.14/dix/devices.c b/Xserver/dix/devices.c
-index e7c74d7..e0c93b6 100644
---- a/xorg-server-1.20.14/dix/devices.c
+@@ -416,6 +416,11 @@ ProcXIChangeHierarchy(ClientPtr client)
+     size_t len;			/* length of data remaining in request */
+     int rc = Success;
+     int flags[MAXDEVICES] = { 0 };
++    enum {
++        NO_CHANGE,
++        FLUSH,
++        CHANGED,
++    } changes = NO_CHANGE;
+ 
+     REQUEST(xXIChangeHierarchyReq);
+     REQUEST_AT_LEAST_SIZE(xXIChangeHierarchyReq);
+@@ -465,8 +470,9 @@ ProcXIChangeHierarchy(ClientPtr client)
+             rc = add_master(client, c, flags);
+             if (rc != Success)
+                 goto unwind;
+-        }
++            changes = FLUSH;
+             break;
++        }
+         case XIRemoveMaster:
+         {
+             xXIRemoveMasterInfo *r = (xXIRemoveMasterInfo *) any;
+@@ -475,8 +481,9 @@ ProcXIChangeHierarchy(ClientPtr client)
+             rc = remove_master(client, r, flags);
+             if (rc != Success)
+                 goto unwind;
+-        }
++            changes = FLUSH;
+             break;
++        }
+         case XIDetachSlave:
+         {
+             xXIDetachSlaveInfo *c = (xXIDetachSlaveInfo *) any;
+@@ -485,8 +492,9 @@ ProcXIChangeHierarchy(ClientPtr client)
+             rc = detach_slave(client, c, flags);
+             if (rc != Success)
+                 goto unwind;
+-        }
++            changes = CHANGED;
+             break;
++        }
+         case XIAttachSlave:
+         {
+             xXIAttachSlaveInfo *c = (xXIAttachSlaveInfo *) any;
+@@ -495,16 +503,25 @@ ProcXIChangeHierarchy(ClientPtr client)
+             rc = attach_slave(client, c, flags);
+             if (rc != Success)
+                 goto unwind;
++            changes = CHANGED;
++            break;
+         }
++        default:
+             break;
+         }
+ 
++        if (changes == FLUSH) {
++            XISendDeviceHierarchyEvent(flags);
++            memset(flags, 0, sizeof(flags));
++            changes = NO_CHANGE;
++        }
++
+         len -= any->length * 4;
+         any = (xXIAnyHierarchyChangeInfo *) ((char *) any + any->length * 4);
+     }
+ 
+  unwind:
+-
+-    XISendDeviceHierarchyEvent(flags);
++    if (changes != NO_CHANGE)
++        XISendDeviceHierarchyEvent(flags);
+     return rc;
+ }
+diff --git a/xserver-dbf6d1c24a00a1f598756c71028876ff2b3db17f/Xi/xipassivegrab.c b/Xserver/Xi/xipassivegrab.c
+index d30f51f..bf9b094 100644
+--- a/xserver-dbf6d1c24a00a1f598756c71028876ff2b3db17f/Xi/xipassivegrab.c
++++ b/Xserver/Xi/xipassivegrab.c
+@@ -93,6 +93,7 @@ ProcXIPassiveGrabDevice(ClientPtr client)
+     GrabParameters param;
+     void *tmp;
+     int mask_len;
++    uint32_t length;
+ 
+     REQUEST(xXIPassiveGrabDeviceReq);
+     REQUEST_FIXED_SIZE(xXIPassiveGrabDeviceReq,
+@@ -133,6 +134,12 @@ ProcXIPassiveGrabDevice(ClientPtr client)
+         return BadValue;
+     }
+ 
++    /* XI2 allows 32-bit keycodes but thanks to XKB we can never
++     * implement this. Just return an error for all keycodes that
++     * cannot work anyway, same for buttons > 255. */
++    if (stuff->detail > 255)
++        return XIAlreadyGrabbed;
++
+     if (XICheckInvalidMaskBits(client, (unsigned char *) &stuff[1],
+                                stuff->mask_len * 4) != Success)
+         return BadValue;
+@@ -203,14 +210,8 @@ ProcXIPassiveGrabDevice(ClientPtr client)
+                                 &param, XI2, &mask);
+             break;
+         case XIGrabtypeKeycode:
+-            /* XI2 allows 32-bit keycodes but thanks to XKB we can never
+-             * implement this. Just return an error for all keycodes that
+-             * cannot work anyway */
+-            if (stuff->detail > 255)
+-                status = XIAlreadyGrabbed;
+-            else
+-                status = GrabKey(client, dev, mod_dev, stuff->detail,
+-                                 &param, XI2, &mask);
++            status = GrabKey(client, dev, mod_dev, stuff->detail,
++                             &param, XI2, &mask);
+             break;
+         case XIGrabtypeEnter:
+         case XIGrabtypeFocusIn:
+@@ -234,9 +235,11 @@ ProcXIPassiveGrabDevice(ClientPtr client)
+         }
+     }
+ 
++    /* save the value before SRepXIPassiveGrabDevice swaps it */
++    length = rep.length;
+     WriteReplyToClient(client, sizeof(rep), &rep);
+     if (rep.num_modifiers)
+-        WriteToClient(client, rep.length * 4, modifiers_failed);
++        WriteToClient(client, length * 4, modifiers_failed);
+ 
+  out:
+     free(modifiers_failed);
+@@ -319,6 +322,12 @@ ProcXIPassiveUngrabDevice(ClientPtr client)
+         return BadValue;
+     }
+ 
++    /* We don't allow passive grabs for details > 255 anyway */
++    if (stuff->detail > 255) {
++        client->errorValue = stuff->detail;
++        return BadValue;
++    }
++
+     rc = dixLookupWindow(&win, stuff->grab_window, client, DixSetAttrAccess);
+     if (rc != Success)
+         return rc;
+diff --git a/xserver-dbf6d1c24a00a1f598756c71028876ff2b3db17f/Xi/xiproperty.c b/Xserver/Xi/xiproperty.c
+index 6ec419e..172ddac 100644
+--- a/xserver-dbf6d1c24a00a1f598756c71028876ff2b3db17f/Xi/xiproperty.c
++++ b/Xserver/Xi/xiproperty.c
+@@ -730,7 +730,7 @@ XIChangeDeviceProperty(DeviceIntPtr dev, Atom property, Atom type,
+                 XIDestroyDeviceProperty(prop);
+             return BadAlloc;
+         }
+-        new_value.size = len;
++        new_value.size = total_len;
+         new_value.type = type;
+         new_value.format = format;
+ 
+@@ -747,7 +747,7 @@ XIChangeDeviceProperty(DeviceIntPtr dev, Atom property, Atom type,
+         case PropModePrepend:
+             new_data = new_value.data;
+             old_data = (void *) (((char *) new_value.data) +
+-                                  (prop_value->size * size_in_bytes));
++                                  (len * size_in_bytes));
+             break;
+         }
+         if (new_data)
+@@ -890,7 +890,7 @@ ProcXChangeDeviceProperty(ClientPtr client)
+     REQUEST(xChangeDevicePropertyReq);
+     DeviceIntPtr dev;
+     unsigned long len;
+-    int totalSize;
++    uint64_t totalSize;
+     int rc;
+ 
+     REQUEST_AT_LEAST_SIZE(xChangeDevicePropertyReq);
+@@ -1128,7 +1128,7 @@ ProcXIChangeProperty(ClientPtr client)
+ {
+     int rc;
+     DeviceIntPtr dev;
+-    int totalSize;
++    uint64_t totalSize;
+     unsigned long len;
+ 
+     REQUEST(xXIChangePropertyReq);
+diff --git a/xserver-dbf6d1c24a00a1f598756c71028876ff2b3db17f/Xi/xiquerypointer.c b/Xserver/Xi/xiquerypointer.c
+index 5b77b1a..2b05ac5 100644
+--- a/xserver-dbf6d1c24a00a1f598756c71028876ff2b3db17f/Xi/xiquerypointer.c
++++ b/Xserver/Xi/xiquerypointer.c
+@@ -149,8 +149,7 @@ ProcXIQueryPointer(ClientPtr client)
+     if (pDev->button) {
+         int i;
+ 
+-        rep.buttons_len =
+-            bytes_to_int32(bits_to_bytes(pDev->button->numButtons));
++        rep.buttons_len = bytes_to_int32(bits_to_bytes(256)); /* button map up to 255 */
+         rep.length += rep.buttons_len;
+         buttons = calloc(rep.buttons_len, 4);
+         if (!buttons)
+diff --git a/xserver-dbf6d1c24a00a1f598756c71028876ff2b3db17f/Xi/xiselectev.c b/Xserver/Xi/xiselectev.c
+index 0498e01..b969242 100644
+--- a/xserver-dbf6d1c24a00a1f598756c71028876ff2b3db17f/Xi/xiselectev.c
++++ b/Xserver/Xi/xiselectev.c
+@@ -297,6 +297,7 @@ ProcXIGetSelectedEvents(ClientPtr client)
+     InputClientsPtr others = NULL;
+     xXIEventMask *evmask = NULL;
+     DeviceIntPtr dev;
++    uint32_t length;
+ 
+     REQUEST(xXIGetSelectedEventsReq);
+     REQUEST_SIZE_MATCH(xXIGetSelectedEventsReq);
+@@ -366,10 +367,12 @@ ProcXIGetSelectedEvents(ClientPtr client)
+         }
+     }
+ 
++    /* save the value before SRepXIGetSelectedEvents swaps it */
++    length = reply.length;
+     WriteReplyToClient(client, sizeof(xXIGetSelectedEventsReply), &reply);
+ 
+     if (reply.num_masks)
+-        WriteToClient(client, reply.length * 4, buffer);
++        WriteToClient(client, length * 4, buffer);
+ 
+     free(buffer);
+     return Success;
+diff --git a/xserver-dbf6d1c24a00a1f598756c71028876ff2b3db17f/composite/compwindow.c b/Xserver/composite/compwindow.c
+index 54b4e6a..8db9d03 100644
+--- a/xserver-dbf6d1c24a00a1f598756c71028876ff2b3db17f/composite/compwindow.c
++++ b/Xserver/composite/compwindow.c
+@@ -613,6 +613,11 @@ compDestroyWindow(WindowPtr pWin)
+     ret = (*pScreen->DestroyWindow) (pWin);
+     cs->DestroyWindow = pScreen->DestroyWindow;
+     pScreen->DestroyWindow = compDestroyWindow;
++
++    /* Did we just destroy the overlay window? */
++    if (pWin == cs->pOverlayWin)
++        cs->pOverlayWin = NULL;
++
+ /*    compCheckTree (pWin->drawable.pScreen); can't check -- tree isn't good*/
+     return ret;
+ }
+diff --git a/xserver-dbf6d1c24a00a1f598756c71028876ff2b3db17f/dix/devices.c b/Xserver/dix/devices.c
+index e7c74d7..bf1aa1c 100644
+--- a/xserver-dbf6d1c24a00a1f598756c71028876ff2b3db17f/dix/devices.c
 +++ b/Xserver/dix/devices.c
-@@ -76,6 +76,11 @@ SOFTWARE.
- #include <X11/extensions/XI2.h>
- #include <X11/extensions/XIproto.h>
- #include <math.h>
-+#ifdef TURBOVNC
-+#ifdef HAVE_IEEEFP_H
-+#include <ieeefp.h>
-+#endif
-+#endif
- #include <pixman.h>
- #include "exglobals.h"
- #include "exevents.h"
-@@ -174,7 +179,11 @@ DeviceSetProperty(DeviceIntPtr dev, Atom property, XIPropertyValuePtr prop,
-             return BadValue;
+@@ -451,14 +451,20 @@ DisableDevice(DeviceIntPtr dev, BOOL sendevent)
+ {
+     DeviceIntPtr *prev, other;
+     BOOL enabled;
++    BOOL dev_in_devices_list = FALSE;
+     int flags[MAXDEVICES] = { 0 };
  
-         for (i = 0; i < 9; i++)
-+#ifdef TURBOVNC
-+            if (!finite(f[i]))
-+#else
-             if (!isfinite(f[i]))
-+#endif
-                 return BadValue;
+     if (!dev->enabled)
+         return TRUE;
  
-         if (!dev->valuator)
-diff --git a/xorg-server-1.20.14/dix/events.c b/Xserver/dix/events.c
+-    for (prev = &inputInfo.devices;
+-         *prev && (*prev != dev); prev = &(*prev)->next);
+-    if (*prev != dev)
++    for (other = inputInfo.devices; other; other = other->next) {
++        if (other == dev) {
++            dev_in_devices_list = TRUE;
++            break;
++        }
++    }
++
++    if (!dev_in_devices_list)
+         return FALSE;
+ 
+     TouchEndPhysicallyActiveTouches(dev);
+@@ -474,6 +480,13 @@ DisableDevice(DeviceIntPtr dev, BOOL sendevent)
+                 flags[other->id] |= XISlaveDetached;
+             }
+         }
++
++        for (other = inputInfo.off_devices; other; other = other->next) {
++            if (!IsMaster(other) && GetMaster(other, MASTER_ATTACHED) == dev) {
++                AttachDevice(NULL, other, NULL);
++                flags[other->id] |= XISlaveDetached;
++            }
++        }
+     }
+     else {
+         for (other = inputInfo.devices; other; other = other->next) {
+@@ -508,6 +521,9 @@ DisableDevice(DeviceIntPtr dev, BOOL sendevent)
+     LeaveWindow(dev);
+     SetFocusOut(dev);
+ 
++    for (prev = &inputInfo.devices;
++         *prev && (*prev != dev); prev = &(*prev)->next);
++
+     *prev = dev->next;
+     dev->next = inputInfo.off_devices;
+     inputInfo.off_devices = dev;
+@@ -1067,6 +1083,11 @@ CloseDownDevices(void)
+             dev->master = NULL;
+     }
+ 
++    for (dev = inputInfo.off_devices; dev; dev = dev->next) {
++        if (!IsMaster(dev) && !IsFloating(dev))
++            dev->master = NULL;
++    }
++
+     CloseDeviceList(&inputInfo.devices);
+     CloseDeviceList(&inputInfo.off_devices);
+ 
+@@ -2502,6 +2523,8 @@ RecalculateMasterButtons(DeviceIntPtr slave)
+ 
+     if (master->button && master->button->numButtons != maxbuttons) {
+         int i;
++        int last_num_buttons = master->button->numButtons;
++
+         DeviceChangedEvent event = {
+             .header = ET_Internal,
+             .type = ET_DeviceChanged,
+@@ -2512,6 +2535,14 @@ RecalculateMasterButtons(DeviceIntPtr slave)
+         };
+ 
+         master->button->numButtons = maxbuttons;
++        if (last_num_buttons < maxbuttons) {
++            master->button->xkb_acts = xnfreallocarray(master->button->xkb_acts,
++                                                       maxbuttons,
++                                                       sizeof(XkbAction));
++            memset(&master->button->xkb_acts[last_num_buttons],
++                   0,
++                   (maxbuttons - last_num_buttons) * sizeof(XkbAction));
++        }
+ 
+         memcpy(&event.buttons.names, master->button->labels, maxbuttons *
+                sizeof(Atom));
+diff --git a/xserver-dbf6d1c24a00a1f598756c71028876ff2b3db17f/dix/enterleave.c b/Xserver/dix/enterleave.c
+index a2f625b..72a953f 100644
+--- a/xserver-dbf6d1c24a00a1f598756c71028876ff2b3db17f/dix/enterleave.c
++++ b/Xserver/dix/enterleave.c
+@@ -615,9 +615,15 @@ FixDeviceValuator(DeviceIntPtr dev, deviceValuator * ev, ValuatorClassPtr v,
+ 
+     ev->type = DeviceValuator;
+     ev->deviceid = dev->id;
+-    ev->num_valuators = nval < 3 ? nval : 3;
++    ev->num_valuators = nval < 6 ? nval : 6;
+     ev->first_valuator = first;
+     switch (ev->num_valuators) {
++    case 6:
++        ev->valuator2 = v->axisVal[first + 5];
++    case 5:
++        ev->valuator2 = v->axisVal[first + 4];
++    case 4:
++        ev->valuator2 = v->axisVal[first + 3];
+     case 3:
+         ev->valuator2 = v->axisVal[first + 2];
+     case 2:
+@@ -626,7 +632,6 @@ FixDeviceValuator(DeviceIntPtr dev, deviceValuator * ev, ValuatorClassPtr v,
+         ev->valuator0 = v->axisVal[first];
+         break;
+     }
+-    first += ev->num_valuators;
+ }
+ 
+ static void
+@@ -646,7 +651,7 @@ FixDeviceStateNotify(DeviceIntPtr dev, deviceStateNotify * ev, KeyClassPtr k,
+         ev->num_buttons = b->numButtons;
+         memcpy((char *) ev->buttons, (char *) b->down, 4);
+     }
+-    else if (k) {
++    if (k) {
+         ev->classes_reported |= (1 << KeyClass);
+         ev->num_keys = k->xkbInfo->desc->max_key_code -
+             k->xkbInfo->desc->min_key_code;
+@@ -670,14 +675,26 @@ FixDeviceStateNotify(DeviceIntPtr dev, deviceStateNotify * ev, KeyClassPtr k,
+     }
+ }
+ 
+-
++/**
++ * The device state notify event is split across multiple 32-byte events.
++ * The first one contains the first 32 button state bits, the first 32
++ * key state bits, and the first 3 valuator values.
++ *
++ * If a device has more than that, the server sends out:
++ * - one deviceButtonStateNotify for buttons 32 and above
++ * - one deviceKeyStateNotify for keys 32 and above
++ * - one deviceValuator event per 6 valuators above valuator 4
++ *
++ * All events but the last one have the deviceid binary ORed with MORE_EVENTS,
++ */
+ static void
+ DeliverStateNotifyEvent(DeviceIntPtr dev, WindowPtr win)
+ {
++    /* deviceStateNotify, deviceKeyStateNotify, deviceButtonStateNotify
++     * and one deviceValuator for each 6 valuators */
++    deviceStateNotify sev[3 + (MAX_VALUATORS + 6)/6];
+     int evcount = 1;
+-    deviceStateNotify *ev, *sev;
+-    deviceKeyStateNotify *kev;
+-    deviceButtonStateNotify *bev;
++    deviceStateNotify *ev = sev;
+ 
+     KeyClassPtr k;
+     ButtonClassPtr b;
+@@ -690,87 +707,53 @@ DeliverStateNotifyEvent(DeviceIntPtr dev, WindowPtr win)
+ 
+     if ((b = dev->button) != NULL) {
+         nbuttons = b->numButtons;
+-        if (nbuttons > 32)
++        if (nbuttons > 32) /* first 32 are encoded in deviceStateNotify */
+             evcount++;
+     }
+     if ((k = dev->key) != NULL) {
+         nkeys = k->xkbInfo->desc->max_key_code - k->xkbInfo->desc->min_key_code;
+-        if (nkeys > 32)
++        if (nkeys > 32) /* first 32 are encoded in deviceStateNotify */
+             evcount++;
+-        if (nbuttons > 0) {
+-            evcount++;
+-        }
+     }
+     if ((v = dev->valuator) != NULL) {
+         nval = v->numAxes;
+-
+-        if (nval > 3)
+-            evcount++;
+-        if (nval > 6) {
+-            if (!(k && b))
+-                evcount++;
+-            if (nval > 9)
+-                evcount += ((nval - 7) / 3);
+-        }
++        /* first three are encoded in deviceStateNotify, then
++         * it's 6 per deviceValuator event */
++        evcount += ((nval - 3) + 6)/6;
+     }
+ 
+-    sev = ev = xallocarray(evcount, sizeof(xEvent));
+-    FixDeviceStateNotify(dev, ev, NULL, NULL, NULL, first);
+-
+-    if (b != NULL) {
+-        FixDeviceStateNotify(dev, ev++, NULL, b, v, first);
+-        first += 3;
+-        nval -= 3;
+-        if (nbuttons > 32) {
+-            (ev - 1)->deviceid |= MORE_EVENTS;
+-            bev = (deviceButtonStateNotify *) ev++;
+-            bev->type = DeviceButtonStateNotify;
+-            bev->deviceid = dev->id;
+-            memcpy((char *) &bev->buttons[4], (char *) &b->down[4],
+-                   DOWN_LENGTH - 4);
+-        }
+-        if (nval > 0) {
+-            (ev - 1)->deviceid |= MORE_EVENTS;
+-            FixDeviceValuator(dev, (deviceValuator *) ev++, v, first);
+-            first += 3;
+-            nval -= 3;
+-        }
++    BUG_RETURN(evcount <= ARRAY_SIZE(sev));
++
++    FixDeviceStateNotify(dev, ev, k, b, v, first);
++
++    if (b != NULL && nbuttons > 32) {
++        deviceButtonStateNotify *bev = (deviceButtonStateNotify *) ++ev;
++        (ev - 1)->deviceid |= MORE_EVENTS;
++        bev->type = DeviceButtonStateNotify;
++        bev->deviceid = dev->id;
++        memcpy((char *) &bev->buttons[4], (char *) &b->down[4],
++               DOWN_LENGTH - 4);
+     }
+ 
+-    if (k != NULL) {
+-        FixDeviceStateNotify(dev, ev++, k, NULL, v, first);
+-        first += 3;
+-        nval -= 3;
+-        if (nkeys > 32) {
+-            (ev - 1)->deviceid |= MORE_EVENTS;
+-            kev = (deviceKeyStateNotify *) ev++;
+-            kev->type = DeviceKeyStateNotify;
+-            kev->deviceid = dev->id;
+-            memmove((char *) &kev->keys[0], (char *) &k->down[4], 28);
+-        }
+-        if (nval > 0) {
+-            (ev - 1)->deviceid |= MORE_EVENTS;
+-            FixDeviceValuator(dev, (deviceValuator *) ev++, v, first);
+-            first += 3;
+-            nval -= 3;
+-        }
++    if (k != NULL && nkeys > 32) {
++        deviceKeyStateNotify *kev = (deviceKeyStateNotify *) ++ev;
++        (ev - 1)->deviceid |= MORE_EVENTS;
++        kev->type = DeviceKeyStateNotify;
++        kev->deviceid = dev->id;
++        memmove((char *) &kev->keys[0], (char *) &k->down[4], 28);
+     }
+ 
++    first = 3;
++    nval -= 3;
+     while (nval > 0) {
+-        FixDeviceStateNotify(dev, ev++, NULL, NULL, v, first);
+-        first += 3;
+-        nval -= 3;
+-        if (nval > 0) {
+-            (ev - 1)->deviceid |= MORE_EVENTS;
+-            FixDeviceValuator(dev, (deviceValuator *) ev++, v, first);
+-            first += 3;
+-            nval -= 3;
+-        }
++        ev->deviceid |= MORE_EVENTS;
++        FixDeviceValuator(dev, (deviceValuator *) ++ev, v, first);
++        first += 6;
++        nval -= 6;
+     }
+ 
+     DeliverEventsToWindow(dev, win, (xEvent *) sev, evcount,
+                           DeviceStateNotifyMask, NullGrab);
+-    free(sev);
+ }
+ 
+ void
+@@ -784,8 +767,9 @@ DeviceFocusEvent(DeviceIntPtr dev, int type, int mode, int detail,
+ 
+     mouse = IsFloating(dev) ? dev : GetMaster(dev, MASTER_POINTER);
+ 
+-    /* XI 2 event */
+-    btlen = (mouse->button) ? bits_to_bytes(mouse->button->numButtons) : 0;
++    /* XI 2 event contains the logical button map - maps are CARD8
++     * so we need 256 bits for the possibly maximum mapping */
++    btlen = (mouse->button) ? bits_to_bytes(256) : 0;
+     btlen = bytes_to_int32(btlen);
+     len = sizeof(xXIFocusInEvent) + btlen * 4;
+ 
+diff --git a/xserver-dbf6d1c24a00a1f598756c71028876ff2b3db17f/dix/events.c b/Xserver/dix/events.c
 index 427b891..0f32bd8 100644
---- a/xorg-server-1.20.14/dix/events.c
+--- a/xserver-dbf6d1c24a00a1f598756c71028876ff2b3db17f/dix/events.c
 +++ b/Xserver/dix/events.c
 @@ -148,6 +148,12 @@ Equipment Corporation.
  #include "eventconvert.h"
@@ -133,27 +711,46 @@ index 427b891..0f32bd8 100644
      /* The client's event type must be a core event type or one defined by an
         extension. */
  
-diff --git a/xorg-server-1.20.14/dix/property.c b/Xserver/dix/property.c
-index ff1d669..de83d00 100644
---- a/xorg-server-1.20.14/dix/property.c
+diff --git a/xserver-dbf6d1c24a00a1f598756c71028876ff2b3db17f/dix/property.c b/Xserver/dix/property.c
+index ff1d669..5f493af 100644
+--- a/xserver-dbf6d1c24a00a1f598756c71028876ff2b3db17f/dix/property.c
 +++ b/Xserver/dix/property.c
-@@ -362,6 +362,13 @@ dixChangeWindowProperty(ClientPtr pClient, WindowPtr pWin, Atom property,
+@@ -57,6 +57,10 @@ SOFTWARE.
+ #include "swaprep.h"
+ #include "xace.h"
+ 
++#ifdef TURBOVNC
++extern void rfbRootPropertyChange(PropertyPtr pProp);
++#endif
++
+ /*****************************************************************
+  * Property Stuff
+  *
+@@ -205,7 +209,8 @@ ProcChangeProperty(ClientPtr client)
+     WindowPtr pWin;
+     char format, mode;
+     unsigned long len;
+-    int sizeInBytes, totalSize, err;
++    int sizeInBytes, err;
++    uint64_t totalSize;
+ 
+     REQUEST(xChangePropertyReq);
+ 
+@@ -362,6 +367,11 @@ dixChangeWindowProperty(ClientPtr pClient, WindowPtr pWin, Atom property,
      if (sendevent)
          deliverPropertyNotifyEvent(pWin, PropertyNewValue, pProp);
  
 +#ifdef TURBOVNC
-+    if (pWin->parent == NullWindow) {
-+        extern void rfbRootPropertyChange();
++    if (pWin->parent == NullWindow)
 +        rfbRootPropertyChange(pProp);
-+    }
 +#endif
 +
      return Success;
  }
  
-diff --git a/xorg-server-1.20.14/dix/registry.c b/Xserver/dix/registry.c
-index 84d48b4..de4bf8e 100644
---- a/xorg-server-1.20.14/dix/registry.c
+diff --git a/xserver-dbf6d1c24a00a1f598756c71028876ff2b3db17f/dix/registry.c b/Xserver/dix/registry.c
+index 84d48b4..3e80392 100644
+--- a/xserver-dbf6d1c24a00a1f598756c71028876ff2b3db17f/dix/registry.c
 +++ b/Xserver/dix/registry.c
 @@ -1,6 +1,7 @@
  /************************************************************
@@ -168,7 +765,7 @@ index 84d48b4..de4bf8e 100644
  
  #ifdef X_REGISTRY_REQUEST
  #define CORE "X11"
-+#ifdef TURBOVNC
++#if defined(TURBOVNC) && !defined(TURBOVNC_STATIC_XORG_PATHS)
 +char registry_path[PATH_MAX] = SERVER_MISC_CONFIG_PATH "/protocol.txt";
 +#define FILENAME registry_path
 +#else
@@ -201,24 +798,26 @@ index 84d48b4..de4bf8e 100644
  
      /* Add the core protocol */
      RegisterExtensionNames(&extEntry);
-diff --git a/xorg-server-1.20.14/dix/selection.c b/Xserver/dix/selection.c
-index d46103f..af0e36e 100644
---- a/xorg-server-1.20.14/dix/selection.c
+diff --git a/xserver-dbf6d1c24a00a1f598756c71028876ff2b3db17f/dix/selection.c b/Xserver/dix/selection.c
+index d46103f..67509d4 100644
+--- a/xserver-dbf6d1c24a00a1f598756c71028876ff2b3db17f/dix/selection.c
 +++ b/Xserver/dix/selection.c
-@@ -54,6 +54,12 @@ SOFTWARE.
+@@ -54,6 +54,14 @@ SOFTWARE.
  #include "selection.h"
  #include "xace.h"
  
 +#ifdef TURBOVNC
 +extern int vncConvertSelection(ClientPtr client, Atom selection, Atom target,
-+                               Atom property, Window requestor, CARD32 time);
++                               Atom property, Window requestor, CARD32 time,
++                               const char *data);
 +extern Window vncGetSelectionWindow(void);
++extern char *cachedData;
 +#endif
 +
  /*****************************************************************
   * Selection Stuff
   *
-@@ -287,6 +293,15 @@ ProcConvertSelection(ClientPtr client)
+@@ -287,6 +295,15 @@ ProcConvertSelection(ClientPtr client)
      memset(&event, 0, sizeof(xEvent));
      if (rc != Success && rc != BadMatch)
          return rc;
@@ -227,16 +826,16 @@ index d46103f..af0e36e 100644
 +             pSel->window == vncGetSelectionWindow()) {
 +        rc = vncConvertSelection(client, stuff->selection, stuff->target,
 +                                 stuff->property, stuff->requestor,
-+                                 stuff->time);
++                                 stuff->time, cachedData);
 +        if (rc == Success) return rc;
 +    }
 +#endif
      else if (rc == Success && pSel->window != None) {
          event.u.u.type = SelectionRequest;
          event.u.selectionRequest.owner = pSel->window;
-diff --git a/xorg-server-1.20.14/fb/fbimage.c b/Xserver/fb/fbimage.c
+diff --git a/xserver-dbf6d1c24a00a1f598756c71028876ff2b3db17f/fb/fbimage.c b/Xserver/fb/fbimage.c
 index bd24728..801df20 100644
---- a/xorg-server-1.20.14/fb/fbimage.c
+--- a/xserver-dbf6d1c24a00a1f598756c71028876ff2b3db17f/fb/fbimage.c
 +++ b/Xserver/fb/fbimage.c
 @@ -210,7 +210,7 @@ fbGetImage(DrawablePtr pDrawable,
  {
@@ -256,15 +855,41 @@ index bd24728..801df20 100644
                  dst[i] &= pm;
          }
      }
-diff --git a/xorg-server-1.20.14/glx/glxdricommon.c b/Xserver/glx/glxdricommon.c
-index 2e00bab..be9352b 100644
---- a/xorg-server-1.20.14/glx/glxdricommon.c
+diff --git a/xserver-dbf6d1c24a00a1f598756c71028876ff2b3db17f/glx/glxcmds.c b/Xserver/glx/glxcmds.c
+index c82ce2c..f493252 100644
+--- a/xserver-dbf6d1c24a00a1f598756c71028876ff2b3db17f/glx/glxcmds.c
++++ b/Xserver/glx/glxcmds.c
+@@ -48,6 +48,7 @@
+ #include "indirect_util.h"
+ #include "protocol-versions.h"
+ #include "glxvndabi.h"
++#include "xace.h"
+ 
+ static char GLXServerVendorName[] = "SGI";
+ 
+@@ -1379,6 +1380,13 @@ DoCreatePbuffer(ClientPtr client, int screenNum, XID fbconfigId,
+     if (!pPixmap)
+         return BadAlloc;
+ 
++    err = XaceHook(XACE_RESOURCE_ACCESS, client, glxDrawableId, RT_PIXMAP,
++                   pPixmap, RT_NONE, NULL, DixCreateAccess);
++    if (err != Success) {
++        (*pGlxScreen->pScreen->DestroyPixmap) (pPixmap);
++        return err;
++    }
++
+     /* Assign the pixmap the same id as the pbuffer and add it as a
+      * resource so it and the DRI2 drawable will be reclaimed when the
+      * pbuffer is destroyed. */
+diff --git a/xserver-dbf6d1c24a00a1f598756c71028876ff2b3db17f/glx/glxdricommon.c b/Xserver/glx/glxdricommon.c
+index 2e00bab..a16e1bc 100644
+--- a/xserver-dbf6d1c24a00a1f598756c71028876ff2b3db17f/glx/glxdricommon.c
 +++ b/Xserver/glx/glxdricommon.c
 @@ -258,7 +258,11 @@ glxConvertConfigs(const __DRIcoreExtension * core,
      return head.next;
  }
  
-+#ifdef TURBOVNC
++#if defined(TURBOVNC) && !defined(TURBOVNC_STATIC_XORG_PATH)
 +char *dri_driver_path = DRI_DRIVER_PATH;
 +#else
  static const char dri_driver_path[] = DRI_DRIVER_PATH;
@@ -272,9 +897,9 @@ index 2e00bab..be9352b 100644
  
  /* Temporary define to allow building without a dri_interface.h from
   * updated Mesa.  Some day when we don't care about Mesa that old any
-diff --git a/xorg-server-1.20.14/glx/glxscreens.h b/Xserver/glx/glxscreens.h
+diff --git a/xserver-dbf6d1c24a00a1f598756c71028876ff2b3db17f/glx/glxscreens.h b/Xserver/glx/glxscreens.h
 index 40649f8..5f89e5d 100644
---- a/xorg-server-1.20.14/glx/glxscreens.h
+--- a/xserver-dbf6d1c24a00a1f598756c71028876ff2b3db17f/glx/glxscreens.h
 +++ b/Xserver/glx/glxscreens.h
 @@ -37,6 +37,7 @@
  
@@ -292,9 +917,9 @@ index 40649f8..5f89e5d 100644
  struct __GLXscreen {
      void (*destroy) (__GLXscreen * screen);
  
-diff --git a/xorg-server-1.20.14/glx/vndext.c b/Xserver/glx/vndext.c
+diff --git a/xserver-dbf6d1c24a00a1f598756c71028876ff2b3db17f/glx/vndext.c b/Xserver/glx/vndext.c
 index 0513733..aa93900 100644
---- a/xorg-server-1.20.14/glx/vndext.c
+--- a/xserver-dbf6d1c24a00a1f598756c71028876ff2b3db17f/glx/vndext.c
 +++ b/Xserver/glx/vndext.c
 @@ -213,6 +213,7 @@ GlxExtensionInit(void)
  {
@@ -313,9 +938,9 @@ index 0513733..aa93900 100644
          if (GlxGetVendorForScreen(serverClient, screenInfo.screens[i]))
              return;
      extEntry->base = 0;
-diff --git a/xorg-server-1.20.14/include/extinit.h b/Xserver/include/extinit.h
+diff --git a/xserver-dbf6d1c24a00a1f598756c71028876ff2b3db17f/include/extinit.h b/Xserver/include/extinit.h
 index 46081ad..9b3a4d5 100644
---- a/xorg-server-1.20.14/include/extinit.h
+--- a/xserver-dbf6d1c24a00a1f598756c71028876ff2b3db17f/include/extinit.h
 +++ b/Xserver/include/extinit.h
 @@ -1,6 +1,7 @@
  /************************************************************
@@ -339,9 +964,9 @@ index 46081ad..9b3a4d5 100644
 +#endif
 +
  #endif
-diff --git a/xorg-server-1.20.14/mi/miinitext.c b/Xserver/mi/miinitext.c
+diff --git a/xserver-dbf6d1c24a00a1f598756c71028876ff2b3db17f/mi/miinitext.c b/Xserver/mi/miinitext.c
 index b7c7021..0e28272 100644
---- a/xorg-server-1.20.14/mi/miinitext.c
+--- a/xserver-dbf6d1c24a00a1f598756c71028876ff2b3db17f/mi/miinitext.c
 +++ b/Xserver/mi/miinitext.c
 @@ -1,6 +1,7 @@
  /***********************************************************
@@ -364,9 +989,9 @@ index b7c7021..0e28272 100644
  };
  
  Bool
-diff --git a/xorg-server-1.20.14/os/backtrace.c b/Xserver/os/backtrace.c
+diff --git a/xserver-dbf6d1c24a00a1f598756c71028876ff2b3db17f/os/backtrace.c b/Xserver/os/backtrace.c
 index 2aad0e3..d0447d7 100644
---- a/xorg-server-1.20.14/os/backtrace.c
+--- a/xserver-dbf6d1c24a00a1f598756c71028876ff2b3db17f/os/backtrace.c
 +++ b/Xserver/os/backtrace.c
 @@ -160,8 +160,10 @@ xorg_backtrace(void)
  #else                           /* not glibc or glibc < 2.1 */
@@ -379,9 +1004,9 @@ index 2aad0e3..d0447d7 100644
  
  #if defined(HAVE_WALKCONTEXT)   /* Solaris 9 & later */
  
-diff --git a/xorg-server-1.20.14/os/log.c b/Xserver/os/log.c
+diff --git a/xserver-dbf6d1c24a00a1f598756c71028876ff2b3db17f/os/log.c b/Xserver/os/log.c
 index cc82191..f5d2891 100644
---- a/xorg-server-1.20.14/os/log.c
+--- a/xserver-dbf6d1c24a00a1f598756c71028876ff2b3db17f/os/log.c
 +++ b/Xserver/os/log.c
 @@ -640,7 +640,7 @@ LogSWrite(int verb, const char *buf, size_t len, Bool end_line)
  void
@@ -392,9 +1017,9 @@ index cc82191..f5d2891 100644
  }
  
  void
-diff --git a/xorg-server-1.20.14/randr/rrmode.c b/Xserver/randr/rrmode.c
+diff --git a/xserver-dbf6d1c24a00a1f598756c71028876ff2b3db17f/randr/rrmode.c b/Xserver/randr/rrmode.c
 index d34025b..d76a24d 100644
---- a/xorg-server-1.20.14/randr/rrmode.c
+--- a/xserver-dbf6d1c24a00a1f598756c71028876ff2b3db17f/randr/rrmode.c
 +++ b/Xserver/randr/rrmode.c
 @@ -1,5 +1,6 @@
  /*
@@ -419,9 +1044,133 @@ index d34025b..d76a24d 100644
      mode = malloc(sizeof(RRModeRec) + modeInfo->nameLength + 1);
      if (!mode)
          return NULL;
-diff --git a/xorg-server-1.20.14/xfixes/xfixes.c b/Xserver/xfixes/xfixes.c
+diff --git a/xserver-dbf6d1c24a00a1f598756c71028876ff2b3db17f/randr/rrproperty.c b/Xserver/randr/rrproperty.c
+index c2fb958..c4fef8a 100644
+--- a/xserver-dbf6d1c24a00a1f598756c71028876ff2b3db17f/randr/rrproperty.c
++++ b/Xserver/randr/rrproperty.c
+@@ -209,7 +209,7 @@ RRChangeOutputProperty(RROutputPtr output, Atom property, Atom type,
+                 RRDestroyOutputProperty(prop);
+             return BadAlloc;
+         }
+-        new_value.size = len;
++        new_value.size = total_len;
+         new_value.type = type;
+         new_value.format = format;
+ 
+@@ -226,7 +226,7 @@ RRChangeOutputProperty(RROutputPtr output, Atom property, Atom type,
+         case PropModePrepend:
+             new_data = new_value.data;
+             old_data = (void *) (((char *) new_value.data) +
+-                                  (prop_value->size * size_in_bytes));
++                                  (len * size_in_bytes));
+             break;
+         }
+         if (new_data)
+@@ -530,7 +530,7 @@ ProcRRChangeOutputProperty(ClientPtr client)
+     char format, mode;
+     unsigned long len;
+     int sizeInBytes;
+-    int totalSize;
++    uint64_t totalSize;
+     int err;
+ 
+     REQUEST_AT_LEAST_SIZE(xRRChangeOutputPropertyReq);
+diff --git a/xserver-dbf6d1c24a00a1f598756c71028876ff2b3db17f/randr/rrproviderproperty.c b/Xserver/randr/rrproviderproperty.c
+index b79c17f..90c5a9a 100644
+--- a/xserver-dbf6d1c24a00a1f598756c71028876ff2b3db17f/randr/rrproviderproperty.c
++++ b/Xserver/randr/rrproviderproperty.c
+@@ -498,7 +498,7 @@ ProcRRChangeProviderProperty(ClientPtr client)
+     char format, mode;
+     unsigned long len;
+     int sizeInBytes;
+-    int totalSize;
++    uint64_t totalSize;
+     int err;
+ 
+     REQUEST_AT_LEAST_SIZE(xRRChangeProviderPropertyReq);
+diff --git a/xserver-dbf6d1c24a00a1f598756c71028876ff2b3db17f/render/glyph.c b/Xserver/render/glyph.c
+index f3ed9cf..d5fc5f3 100644
+--- a/xserver-dbf6d1c24a00a1f598756c71028876ff2b3db17f/render/glyph.c
++++ b/Xserver/render/glyph.c
+@@ -245,10 +245,11 @@ FreeGlyphPicture(GlyphPtr glyph)
+     }
+ }
+ 
+-static void
++void
+ FreeGlyph(GlyphPtr glyph, int format)
+ {
+     CheckDuplicates(&globalGlyphs[format], "FreeGlyph");
++    BUG_RETURN(glyph->refcnt == 0);
+     if (--glyph->refcnt == 0) {
+         GlyphRefPtr gr;
+         int i;
+@@ -354,7 +355,7 @@ AllocateGlyph(xGlyphInfo * gi, int fdepth)
+     glyph = (GlyphPtr) malloc(size);
+     if (!glyph)
+         return 0;
+-    glyph->refcnt = 0;
++    glyph->refcnt = 1;
+     glyph->size = size + sizeof(xGlyphInfo);
+     glyph->info = *gi;
+     dixInitPrivates(glyph, (char *) glyph + head_size, PRIVATE_GLYPH);
+diff --git a/xserver-dbf6d1c24a00a1f598756c71028876ff2b3db17f/render/glyphstr.h b/Xserver/render/glyphstr.h
+index 2f51bd2..e803455 100644
+--- a/xserver-dbf6d1c24a00a1f598756c71028876ff2b3db17f/render/glyphstr.h
++++ b/Xserver/render/glyphstr.h
+@@ -109,6 +109,8 @@ extern GlyphPtr FindGlyph(GlyphSetPtr glyphSet, Glyph id);
+ 
+ extern GlyphPtr AllocateGlyph(xGlyphInfo * gi, int format);
+ 
++extern void FreeGlyph(GlyphPtr glyph, int format);
++
+ extern Bool
+  ResizeGlyphSet(GlyphSetPtr glyphSet, CARD32 change);
+ 
+diff --git a/xserver-dbf6d1c24a00a1f598756c71028876ff2b3db17f/render/render.c b/Xserver/render/render.c
+index 456f156..5bc2a20 100644
+--- a/xserver-dbf6d1c24a00a1f598756c71028876ff2b3db17f/render/render.c
++++ b/Xserver/render/render.c
+@@ -1076,6 +1076,7 @@ ProcRenderAddGlyphs(ClientPtr client)
+ 
+         if (glyph_new->glyph && glyph_new->glyph != DeletedGlyph) {
+             glyph_new->found = TRUE;
++            ++glyph_new->glyph->refcnt;
+         }
+         else {
+             GlyphPtr glyph;
+@@ -1168,8 +1169,10 @@ ProcRenderAddGlyphs(ClientPtr client)
+         err = BadAlloc;
+         goto bail;
+     }
+-    for (i = 0; i < nglyphs; i++)
++    for (i = 0; i < nglyphs; i++) {
+         AddGlyph(glyphSet, glyphs[i].glyph, glyphs[i].id);
++        FreeGlyph(glyphs[i].glyph, glyphSet->fdepth);
++    }
+ 
+     if (glyphsBase != glyphsLocal)
+         free(glyphsBase);
+@@ -1179,9 +1182,13 @@ ProcRenderAddGlyphs(ClientPtr client)
+         FreePicture((void *) pSrc, 0);
+     if (pSrcPix)
+         FreeScratchPixmapHeader(pSrcPix);
+-    for (i = 0; i < nglyphs; i++)
+-        if (glyphs[i].glyph && !glyphs[i].found)
+-            free(glyphs[i].glyph);
++    for (i = 0; i < nglyphs; i++) {
++        if (glyphs[i].glyph) {
++            --glyphs[i].glyph->refcnt;
++            if (!glyphs[i].found)
++                free(glyphs[i].glyph);
++        }
++    }
+     if (glyphsBase != glyphsLocal)
+         free(glyphsBase);
+     return err;
+diff --git a/xserver-dbf6d1c24a00a1f598756c71028876ff2b3db17f/xfixes/xfixes.c b/Xserver/xfixes/xfixes.c
 index 53a6bd6..28248d4 100644
---- a/xorg-server-1.20.14/xfixes/xfixes.c
+--- a/xserver-dbf6d1c24a00a1f598756c71028876ff2b3db17f/xfixes/xfixes.c
 +++ b/Xserver/xfixes/xfixes.c
 @@ -221,7 +221,27 @@ XFixesExtensionInit(void)
          return;
@@ -451,15 +1200,359 @@ index 53a6bd6..28248d4 100644
                                   XFixesNumberErrors,
                                   ProcXFixesDispatch, SProcXFixesDispatch,
                                   NULL, StandardMinorOpcode)) != 0) {
-diff --git a/xorg-server-1.20.14/xkb/xkbInit.c b/Xserver/xkb/xkbInit.c
-index 9e45b4b..b63549f 100644
---- a/xorg-server-1.20.14/xkb/xkbInit.c
+diff --git a/xserver-dbf6d1c24a00a1f598756c71028876ff2b3db17f/xkb/xkb.c b/Xserver/xkb/xkb.c
+index 68c59df..7b5c623 100644
+--- a/xserver-dbf6d1c24a00a1f598756c71028876ff2b3db17f/xkb/xkb.c
++++ b/Xserver/xkb/xkb.c
+@@ -2993,13 +2993,13 @@ _XkbSetCompatMap(ClientPtr client, DeviceIntPtr dev,
+         XkbSymInterpretPtr sym;
+         unsigned int skipped = 0;
+ 
+-        if ((unsigned) (req->firstSI + req->nSI) > compat->num_si) {
+-            compat->num_si = req->firstSI + req->nSI;
++        if ((unsigned) (req->firstSI + req->nSI) > compat->size_si) {
++            compat->num_si = compat->size_si = req->firstSI + req->nSI;
+             compat->sym_interpret = reallocarray(compat->sym_interpret,
+-                                                 compat->num_si,
++                                                 compat->size_si,
+                                                  sizeof(XkbSymInterpretRec));
+             if (!compat->sym_interpret) {
+-                compat->num_si = 0;
++                compat->num_si = compat->size_si = 0;
+                 return BadAlloc;
+             }
+         }
+@@ -5157,7 +5157,7 @@ _GetCountedString(char **wire_inout, ClientPtr client, char **str)
+ }
+ 
+ static Status
+-_CheckSetDoodad(char **wire_inout,
++_CheckSetDoodad(char **wire_inout, xkbSetGeometryReq *req,
+                 XkbGeometryPtr geom, XkbSectionPtr section, ClientPtr client)
+ {
+     char *wire;
+@@ -5168,6 +5168,9 @@ _CheckSetDoodad(char **wire_inout,
+     Status status;
+ 
+     dWire = (xkbDoodadWireDesc *) (*wire_inout);
++    if (!_XkbCheckRequestBounds(client, req, dWire, dWire + 1))
++        return BadLength;
++
+     any = dWire->any;
+     wire = (char *) &dWire[1];
+     if (client->swapped) {
+@@ -5270,7 +5273,7 @@ _CheckSetDoodad(char **wire_inout,
+ }
+ 
+ static Status
+-_CheckSetOverlay(char **wire_inout,
++_CheckSetOverlay(char **wire_inout, xkbSetGeometryReq *req,
+                  XkbGeometryPtr geom, XkbSectionPtr section, ClientPtr client)
+ {
+     register int r;
+@@ -5281,6 +5284,9 @@ _CheckSetOverlay(char **wire_inout,
+ 
+     wire = *wire_inout;
+     olWire = (xkbOverlayWireDesc *) wire;
++    if (!_XkbCheckRequestBounds(client, req, olWire, olWire + 1))
++        return BadLength;
++
+     if (client->swapped) {
+         swapl(&olWire->name);
+     }
+@@ -5292,6 +5298,9 @@ _CheckSetOverlay(char **wire_inout,
+         xkbOverlayKeyWireDesc *kWire;
+         XkbOverlayRowPtr row;
+ 
++        if (!_XkbCheckRequestBounds(client, req, rWire, rWire + 1))
++            return BadLength;
++
+         if (rWire->rowUnder > section->num_rows) {
+             client->errorValue = _XkbErrCode4(0x20, r, section->num_rows,
+                                               rWire->rowUnder);
+@@ -5300,6 +5309,9 @@ _CheckSetOverlay(char **wire_inout,
+         row = XkbAddGeomOverlayRow(ol, rWire->rowUnder, rWire->nKeys);
+         kWire = (xkbOverlayKeyWireDesc *) &rWire[1];
+         for (k = 0; k < rWire->nKeys; k++, kWire++) {
++            if (!_XkbCheckRequestBounds(client, req, kWire, kWire + 1))
++                return BadLength;
++
+             if (XkbAddGeomOverlayKey(ol, row,
+                                      (char *) kWire->over,
+                                      (char *) kWire->under) == NULL) {
+@@ -5333,6 +5345,9 @@ _CheckSetSections(XkbGeometryPtr geom,
+         register int r;
+         xkbRowWireDesc *rWire;
+ 
++        if (!_XkbCheckRequestBounds(client, req, sWire, sWire + 1))
++            return BadLength;
++
+         if (client->swapped) {
+             swapl(&sWire->name);
+             swaps(&sWire->top);
+@@ -5358,6 +5373,9 @@ _CheckSetSections(XkbGeometryPtr geom,
+             XkbRowPtr row;
+             xkbKeyWireDesc *kWire;
+ 
++            if (!_XkbCheckRequestBounds(client, req, rWire, rWire + 1))
++                return BadLength;
++
+             if (client->swapped) {
+                 swaps(&rWire->top);
+                 swaps(&rWire->left);
+@@ -5369,16 +5387,19 @@ _CheckSetSections(XkbGeometryPtr geom,
+             row->left = rWire->left;
+             row->vertical = rWire->vertical;
+             kWire = (xkbKeyWireDesc *) &rWire[1];
+-            for (k = 0; k < rWire->nKeys; k++) {
++            for (k = 0; k < rWire->nKeys; k++, kWire++) {
+                 XkbKeyPtr key;
+ 
++                if (!_XkbCheckRequestBounds(client, req, kWire, kWire + 1))
++                    return BadLength;
++
+                 key = XkbAddGeomKey(row);
+                 if (!key)
+                     return BadAlloc;
+-                memcpy(key->name.name, kWire[k].name, XkbKeyNameLength);
+-                key->gap = kWire[k].gap;
+-                key->shape_ndx = kWire[k].shapeNdx;
+-                key->color_ndx = kWire[k].colorNdx;
++                memcpy(key->name.name, kWire->name, XkbKeyNameLength);
++                key->gap = kWire->gap;
++                key->shape_ndx = kWire->shapeNdx;
++                key->color_ndx = kWire->colorNdx;
+                 if (key->shape_ndx >= geom->num_shapes) {
+                     client->errorValue = _XkbErrCode3(0x10, key->shape_ndx,
+                                                       geom->num_shapes);
+@@ -5390,14 +5411,14 @@ _CheckSetSections(XkbGeometryPtr geom,
+                     return BadMatch;
+                 }
+             }
+-            rWire = (xkbRowWireDesc *) &kWire[rWire->nKeys];
++            rWire = (xkbRowWireDesc *)kWire;
+         }
+         wire = (char *) rWire;
+         if (sWire->nDoodads > 0) {
+             register int d;
+ 
+             for (d = 0; d < sWire->nDoodads; d++) {
+-                status = _CheckSetDoodad(&wire, geom, section, client);
++                status = _CheckSetDoodad(&wire, req, geom, section, client);
+                 if (status != Success)
+                     return status;
+             }
+@@ -5406,7 +5427,7 @@ _CheckSetSections(XkbGeometryPtr geom,
+             register int o;
+ 
+             for (o = 0; o < sWire->nOverlays; o++) {
+-                status = _CheckSetOverlay(&wire, geom, section, client);
++                status = _CheckSetOverlay(&wire, req, geom, section, client);
+                 if (status != Success)
+                     return status;
+             }
+@@ -5440,6 +5461,9 @@ _CheckSetShapes(XkbGeometryPtr geom,
+             xkbOutlineWireDesc *olWire;
+             XkbOutlinePtr ol;
+ 
++            if (!_XkbCheckRequestBounds(client, req, shapeWire, shapeWire + 1))
++                return BadLength;
++
+             shape =
+                 XkbAddGeomShape(geom, shapeWire->name, shapeWire->nOutlines);
+             if (!shape)
+@@ -5450,21 +5474,27 @@ _CheckSetShapes(XkbGeometryPtr geom,
+                 XkbPointPtr pt;
+                 xkbPointWireDesc *ptWire;
+ 
++                if (!_XkbCheckRequestBounds(client, req, olWire, olWire + 1))
++                    return BadLength;
++
+                 ol = XkbAddGeomOutline(shape, olWire->nPoints);
+                 if (!ol)
+                     return BadAlloc;
+                 ol->corner_radius = olWire->cornerRadius;
+                 ptWire = (xkbPointWireDesc *) &olWire[1];
+-                for (p = 0, pt = ol->points; p < olWire->nPoints; p++, pt++) {
+-                    pt->x = ptWire[p].x;
+-                    pt->y = ptWire[p].y;
++                for (p = 0, pt = ol->points; p < olWire->nPoints; p++, pt++, ptWire++) {
++                    if (!_XkbCheckRequestBounds(client, req, ptWire, ptWire + 1))
++                        return BadLength;
++
++                    pt->x = ptWire->x;
++                    pt->y = ptWire->y;
+                     if (client->swapped) {
+                         swaps(&pt->x);
+                         swaps(&pt->y);
+                     }
+                 }
+                 ol->num_points = olWire->nPoints;
+-                olWire = (xkbOutlineWireDesc *) (&ptWire[olWire->nPoints]);
++                olWire = (xkbOutlineWireDesc *)ptWire;
+             }
+             if (shapeWire->primaryNdx != XkbNoShape)
+                 shape->primary = &shape->outlines[shapeWire->primaryNdx];
+@@ -5561,12 +5591,15 @@ _CheckSetGeom(XkbGeometryPtr geom, xkbSetGeometryReq * req, ClientPtr client)
+         return status;
+ 
+     for (i = 0; i < req->nDoodads; i++) {
+-        status = _CheckSetDoodad(&wire, geom, NULL, client);
++        status = _CheckSetDoodad(&wire, req, geom, NULL, client);
+         if (status != Success)
+             return status;
+     }
+ 
+     for (i = 0; i < req->nKeyAliases; i++) {
++        if (!_XkbCheckRequestBounds(client, req, wire, wire + XkbKeyNameLength))
++                return BadLength;
++
+         if (XkbAddGeomKeyAlias(geom, &wire[XkbKeyNameLength], wire) == NULL)
+             return BadAlloc;
+         wire += 2 * XkbKeyNameLength;
+@@ -6551,7 +6584,8 @@ ProcXkbGetDeviceInfo(ClientPtr client)
+ static char *
+ CheckSetDeviceIndicators(char *wire,
+                          DeviceIntPtr dev,
+-                         int num, int *status_rtrn, ClientPtr client)
++                         int num, int *status_rtrn, ClientPtr client,
++                         xkbSetDeviceInfoReq * stuff)
+ {
+     xkbDeviceLedsWireDesc *ledWire;
+     int i;
+@@ -6559,6 +6593,11 @@ CheckSetDeviceIndicators(char *wire,
+ 
+     ledWire = (xkbDeviceLedsWireDesc *) wire;
+     for (i = 0; i < num; i++) {
++        if (!_XkbCheckRequestBounds(client, stuff, ledWire, ledWire + 1)) {
++            *status_rtrn = BadLength;
++            return (char *) ledWire;
++        }
++
+         if (client->swapped) {
+             swaps(&ledWire->ledClass);
+             swaps(&ledWire->ledID);
+@@ -6586,6 +6625,11 @@ CheckSetDeviceIndicators(char *wire,
+             atomWire = (CARD32 *) &ledWire[1];
+             if (nNames > 0) {
+                 for (n = 0; n < nNames; n++) {
++                    if (!_XkbCheckRequestBounds(client, stuff, atomWire, atomWire + 1)) {
++                        *status_rtrn = BadLength;
++                        return (char *) atomWire;
++                    }
++
+                     if (client->swapped) {
+                         swapl(atomWire);
+                     }
+@@ -6597,6 +6641,10 @@ CheckSetDeviceIndicators(char *wire,
+             mapWire = (xkbIndicatorMapWireDesc *) atomWire;
+             if (nMaps > 0) {
+                 for (n = 0; n < nMaps; n++) {
++                    if (!_XkbCheckRequestBounds(client, stuff, mapWire, mapWire + 1)) {
++                        *status_rtrn = BadLength;
++                        return (char *) mapWire;
++                    }
+                     if (client->swapped) {
+                         swaps(&mapWire->virtualMods);
+                         swapl(&mapWire->ctrls);
+@@ -6648,11 +6696,6 @@ SetDeviceIndicators(char *wire,
+         xkbIndicatorMapWireDesc *mapWire;
+         XkbSrvLedInfoPtr sli;
+ 
+-        if (!_XkbCheckRequestBounds(client, stuff, ledWire, ledWire + 1)) {
+-            *status_rtrn = BadLength;
+-            return (char *) ledWire;
+-        }
+-
+         namec = mapc = statec = 0;
+         sli = XkbFindSrvLedInfo(dev, ledWire->ledClass, ledWire->ledID,
+                                 XkbXI_IndicatorMapsMask);
+@@ -6671,10 +6714,6 @@ SetDeviceIndicators(char *wire,
+             memset((char *) sli->names, 0, XkbNumIndicators * sizeof(Atom));
+             for (n = 0, bit = 1; n < XkbNumIndicators; n++, bit <<= 1) {
+                 if (ledWire->namesPresent & bit) {
+-                    if (!_XkbCheckRequestBounds(client, stuff, atomWire, atomWire + 1)) {
+-                        *status_rtrn = BadLength;
+-                        return (char *) atomWire;
+-                    }
+                     sli->names[n] = (Atom) *atomWire;
+                     if (sli->names[n] == None)
+                         ledWire->namesPresent &= ~bit;
+@@ -6692,10 +6731,6 @@ SetDeviceIndicators(char *wire,
+         if (ledWire->mapsPresent) {
+             for (n = 0, bit = 1; n < XkbNumIndicators; n++, bit <<= 1) {
+                 if (ledWire->mapsPresent & bit) {
+-                    if (!_XkbCheckRequestBounds(client, stuff, mapWire, mapWire + 1)) {
+-                        *status_rtrn = BadLength;
+-                        return (char *) mapWire;
+-                    }
+                     sli->maps[n].flags = mapWire->flags;
+                     sli->maps[n].which_groups = mapWire->whichGroups;
+                     sli->maps[n].groups = mapWire->groups;
+@@ -6731,13 +6766,17 @@ SetDeviceIndicators(char *wire,
+ }
+ 
+ static int
+-_XkbSetDeviceInfo(ClientPtr client, DeviceIntPtr dev,
++_XkbSetDeviceInfoCheck(ClientPtr client, DeviceIntPtr dev,
+                   xkbSetDeviceInfoReq * stuff)
+ {
+     char *wire;
+ 
+     wire = (char *) &stuff[1];
+     if (stuff->change & XkbXI_ButtonActionsMask) {
++        int sz = stuff->nBtns * SIZEOF(xkbActionWireDesc);
++        if (!_XkbCheckRequestBounds(client, stuff, wire, (char *) wire + sz))
++            return BadLength;
++
+         if (!dev->button) {
+             client->errorValue = _XkbErrCode2(XkbErr_BadClass, ButtonClass);
+             return XkbKeyboardErrorCode;
+@@ -6748,13 +6787,13 @@ _XkbSetDeviceInfo(ClientPtr client, DeviceIntPtr dev,
+                              dev->button->numButtons);
+             return BadMatch;
+         }
+-        wire += (stuff->nBtns * SIZEOF(xkbActionWireDesc));
++        wire += sz;
+     }
+     if (stuff->change & XkbXI_IndicatorsMask) {
+         int status = Success;
+ 
+         wire = CheckSetDeviceIndicators(wire, dev, stuff->nDeviceLedFBs,
+-                                        &status, client);
++                                        &status, client, stuff);
+         if (status != Success)
+             return status;
+     }
+@@ -6765,8 +6804,8 @@ _XkbSetDeviceInfo(ClientPtr client, DeviceIntPtr dev,
+ }
+ 
+ static int
+-_XkbSetDeviceInfoCheck(ClientPtr client, DeviceIntPtr dev,
+-                       xkbSetDeviceInfoReq * stuff)
++_XkbSetDeviceInfo(ClientPtr client, DeviceIntPtr dev,
++                  xkbSetDeviceInfoReq * stuff)
+ {
+     char *wire;
+     xkbExtensionDeviceNotify ed;
+@@ -6790,8 +6829,6 @@ _XkbSetDeviceInfoCheck(ClientPtr client, DeviceIntPtr dev,
+         if (stuff->firstBtn + stuff->nBtns > nBtns)
+             return BadValue;
+         sz = stuff->nBtns * SIZEOF(xkbActionWireDesc);
+-        if (!_XkbCheckRequestBounds(client, stuff, wire, (char *) wire + sz))
+-            return BadLength;
+         memcpy((char *) &acts[stuff->firstBtn], (char *) wire, sz);
+         wire += sz;
+         ed.reason |= XkbXI_ButtonActionsMask;
+diff --git a/xserver-dbf6d1c24a00a1f598756c71028876ff2b3db17f/xkb/xkbInit.c b/Xserver/xkb/xkbInit.c
+index 9e45b4b..ddd5ef7 100644
+--- a/xserver-dbf6d1c24a00a1f598756c71028876ff2b3db17f/xkb/xkbInit.c
 +++ b/Xserver/xkb/xkbInit.c
 @@ -767,6 +767,30 @@ XkbProcessArguments(int argc, char *argv[], int i)
              return -1;
          }
      }
-+#ifdef TURBOVNC
++#if defined(TURBOVNC) && !defined(TURBOVNC_XORG_STATIC_PATHS)
 +    else if (strncmp(argv[i], "-xkbcompdir", 11) == 0) {
 +        if (++i < argc) {
 +#if !defined(WIN32) && !defined(__CYGWIN__)
@@ -486,3 +1579,15 @@ index 9e45b4b..b63549f 100644
      else if ((strncmp(argv[i], "-accessx", 8) == 0) ||
               (strncmp(argv[i], "+accessx", 8) == 0)) {
          int j = 1;
+diff --git a/xserver-dbf6d1c24a00a1f598756c71028876ff2b3db17f/xkb/xkbUtils.c b/Xserver/xkb/xkbUtils.c
+index 8975ade..9bc51fc 100644
+--- a/xserver-dbf6d1c24a00a1f598756c71028876ff2b3db17f/xkb/xkbUtils.c
++++ b/Xserver/xkb/xkbUtils.c
+@@ -1327,6 +1327,7 @@ _XkbCopyNames(XkbDescPtr src, XkbDescPtr dst)
+         }
+         else {
+             free(dst->names->radio_groups);
++            dst->names->radio_groups = NULL;
+         }
+         dst->names->num_rg = src->names->num_rg;
+ 

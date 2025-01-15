@@ -1,8 +1,8 @@
-/* Copyright (C) 2002-2005 RealVNC Ltd.  All Rights Reserved.
- * Copyright 2009, 2011 Pierre Ossman for Cendio AB
+/* Copyright (C) 2011-2012, 2015-2018, 2021-2022, 2024 D. R. Commander.
+ *                                                     All Rights Reserved.
+ * Copyright 2009, 2011, 2019 Pierre Ossman for Cendio AB
  * Copyright (C) 2011-2012 Brian P. Hinz
- * Copyright (C) 2011-2012, 2015-2018, 2021 D. R. Commander.
- *                                          All Rights Reserved.
+ * Copyright (C) 2002-2005 RealVNC Ltd.  All Rights Reserved.
  *
  * This is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -54,9 +54,6 @@ public final class RFB {
   public static final int SECTYPE_X509_NONE  = 260;
   public static final int SECTYPE_X509_VNC   = 261;
   public static final int SECTYPE_X509_PLAIN = 262;
-  public static final int SECTYPE_IDENT      = 265;
-  public static final int SECTYPE_TLS_IDENT  = 266;
-  public static final int SECTYPE_X509_IDENT = 267;
 
   public static int secTypeNum(String name) {
     if (name.equalsIgnoreCase("None"))      return SECTYPE_NONE;
@@ -76,15 +73,12 @@ public final class RFB {
 
     // VeNCrypt subtypes
     if (name.equalsIgnoreCase("Plain"))     return SECTYPE_PLAIN;
-    if (name.equalsIgnoreCase("Ident"))     return SECTYPE_IDENT;
     if (name.equalsIgnoreCase("TLSNone"))   return SECTYPE_TLS_NONE;
     if (name.equalsIgnoreCase("TLSVnc"))    return SECTYPE_TLS_VNC;
     if (name.equalsIgnoreCase("TLSPlain"))  return SECTYPE_TLS_PLAIN;
-    if (name.equalsIgnoreCase("TLSIdent"))  return SECTYPE_TLS_IDENT;
     if (name.equalsIgnoreCase("X509None"))  return SECTYPE_X509_NONE;
     if (name.equalsIgnoreCase("X509Vnc"))   return SECTYPE_X509_VNC;
     if (name.equalsIgnoreCase("X509Plain")) return SECTYPE_X509_PLAIN;
-    if (name.equalsIgnoreCase("X509Ident")) return SECTYPE_X509_IDENT;
 
     return SECTYPE_INVALID;
   }
@@ -107,15 +101,12 @@ public final class RFB {
 
       // VeNCrypt subtypes
       case SECTYPE_PLAIN:       return "Plain";
-      case SECTYPE_IDENT:       return "Ident";
       case SECTYPE_TLS_NONE:    return "TLSNone";
       case SECTYPE_TLS_VNC:     return "TLSVnc";
       case SECTYPE_TLS_PLAIN:   return "TLSPlain";
-      case SECTYPE_TLS_IDENT:   return "TLSIdent";
       case SECTYPE_X509_NONE:   return "X509None";
       case SECTYPE_X509_VNC:    return "X509Vnc";
       case SECTYPE_X509_PLAIN:  return "X509Plain";
-      case SECTYPE_X509_IDENT:  return "X509Ident";
       default:                  return "[unknown SecType]";
     }
   }
@@ -126,11 +117,9 @@ public final class RFB {
       case SECTYPE_TLS_NONE:
       case SECTYPE_TLS_VNC:
       case SECTYPE_TLS_PLAIN:
-      case SECTYPE_TLS_IDENT:
       case SECTYPE_X509_NONE:
       case SECTYPE_X509_VNC:
       case SECTYPE_X509_PLAIN:
-      case SECTYPE_X509_IDENT:
         return true;
       default:
         return false;
@@ -144,34 +133,6 @@ public final class RFB {
   public static final int AUTH_OK       = 0;
   public static final int AUTH_FAILED   = 1;
   public static final int AUTH_TOO_MANY = 2;  // deprecated
-
-  //***************************************************************************
-  // Extended desktop size reason and result codes
-  //***************************************************************************
-
-  public static final int EDS_REASON_SERVER       = 0;
-  public static final int EDS_REASON_CLIENT       = 1;
-  public static final int EDS_REASON_OTHER_CLIENT = 2;
-
-  public static final int EDS_RESULT_SUCCESS      = 0;
-  public static final int EDS_RESULT_PROHIBITED   = 1;
-  public static final int EDS_RESULT_NO_RESOURCES = 2;
-  public static final int EDS_RESULT_INVALID      = 3;
-
-  //***************************************************************************
-  // Fence flags
-  //***************************************************************************
-
-  public static final int FENCE_FLAG_BLOCK_BEFORE = 1 << 0;
-  public static final int FENCE_FLAG_BLOCK_AFTER  = 1 << 1;
-  public static final int FENCE_FLAG_SYNC_NEXT    = 1 << 2;
-
-  public static final int FENCE_FLAG_REQUEST      = 1 << 31;
-
-  public static final int FENCE_FLAGS_SUPPORTED   = (FENCE_FLAG_BLOCK_BEFORE |
-                                                     FENCE_FLAG_BLOCK_AFTER |
-                                                     FENCE_FLAG_SYNC_NEXT |
-                                                     FENCE_FLAG_REQUEST);
 
   //***************************************************************************
   // Message types
@@ -200,6 +161,7 @@ public final class RFB {
   // Server -> Client and Client -> Server
   public static final int FENCE = 248;
   public static final int GII   = 253;
+  public static final int QEMU  = 255;
 
   //***************************************************************************
   // Encoding types
@@ -212,7 +174,7 @@ public final class RFB {
   public static final int ENCODING_HEXTILE  = 5;
   public static final int ENCODING_TIGHT    = 7;
   public static final int ENCODING_ZRLE     = 16;
-  public static final int ENCODING_LAST     = ENCODING_TIGHT;
+  public static final int ENCODING_LAST     = ENCODING_ZRLE;
 
   public static final int ENCODING_MAX      = 255;
 
@@ -242,32 +204,83 @@ public final class RFB {
   // Pseudo-encodings
   //***************************************************************************
 
-  public static final int ENCODING_CONTINUOUS_UPDATES    = -313;
-  public static final int ENCODING_FENCE                 = -312;
-  public static final int ENCODING_CLIENT_REDIRECT       = -311;
-  public static final int ENCODING_EXTENDED_DESKTOP_SIZE = -308;
-  public static final int ENCODING_DESKTOP_NAME          = -307;
-  public static final int ENCODING_GII                   = -305;
-  public static final int ENCODING_X_CURSOR              = -240;
-  public static final int ENCODING_RICH_CURSOR           = -239;
-  public static final int ENCODING_NEW_FB_SIZE           = -223;
+  public static final int ENCODING_VMWARE_LED_STATE        = 0x574D5668;
 
-  // TightVNC-specific
-  public static final int ENCODING_COMPRESS_LEVEL_0 = -256;
-  public static final int ENCODING_COMPRESS_LEVEL_9 = -247;
-  public static final int ENCODING_LAST_RECT        = -224;
-  public static final int ENCODING_QUALITY_LEVEL_0  = -32;
-  public static final int ENCODING_QUALITY_LEVEL_9  = -23;
+  public static final int ENCODING_EXTENDED_CLIPBOARD      = 0xC0A1E5CE;
 
-  // TurboVNC-specific
-  public static final int ENCODING_FINE_QUALITY_LEVEL_0   = -512;
-  public static final int ENCODING_FINE_QUALITY_LEVEL_100 = -412;
-  public static final int ENCODING_SUBSAMP_1X             = -768;
-  public static final int ENCODING_SUBSAMP_4X             = -767;
-  public static final int ENCODING_SUBSAMP_2X             = -766;
-  public static final int ENCODING_SUBSAMP_GRAY           = -765;
-  public static final int ENCODING_SUBSAMP_8X             = -764;
-  public static final int ENCODING_SUBSAMP_16X            = -763;
+  public static final int ENCODING_SUBSAMP_1X              = -768;
+  public static final int ENCODING_SUBSAMP_4X              = -767;
+  public static final int ENCODING_SUBSAMP_2X              = -766;
+  public static final int ENCODING_SUBSAMP_GRAY            = -765;
+  public static final int ENCODING_SUBSAMP_8X              = -764;
+  public static final int ENCODING_SUBSAMP_16X             = -763;
+  public static final int ENCODING_FINE_QUALITY_LEVEL_0    = -512;
+  public static final int ENCODING_FINE_QUALITY_LEVEL_100  = -412;
+
+  public static final int ENCODING_TIGHT_WITHOUT_ZLIB      = -317;
+
+  public static final int ENCODING_CONTINUOUS_UPDATES      = -313;
+  public static final int ENCODING_FENCE                   = -312;
+
+  public static final int ENCODING_CLIENT_REDIRECT         = -311;
+
+  public static final int ENCODING_EXTENDED_DESKTOP_SIZE   = -308;
+
+  public static final int ENCODING_DESKTOP_NAME            = -307;
+
+  public static final int ENCODING_GII                     = -305;
+
+  public static final int ENCODING_QEMU_LED_STATE          = -261;
+  public static final int ENCODING_QEMU_EXTENDED_KEY_EVENT = -258;
+
+  public static final int ENCODING_COMPRESS_LEVEL_0        = -256;
+  public static final int ENCODING_COMPRESS_LEVEL_9        = -247;
+
+  public static final int ENCODING_X_CURSOR                = -240;
+  public static final int ENCODING_RICH_CURSOR             = -239;
+
+  public static final int ENCODING_LAST_RECT               = -224;
+  public static final int ENCODING_NEW_FB_SIZE             = -223;
+
+  public static final int ENCODING_QUALITY_LEVEL_0         = -32;
+  public static final int ENCODING_QUALITY_LEVEL_9         = -23;
+
+  //***************************************************************************
+  // Fence flags
+  //***************************************************************************
+
+  public static final int FENCE_FLAG_BLOCK_BEFORE = 1 << 0;
+  public static final int FENCE_FLAG_BLOCK_AFTER  = 1 << 1;
+  public static final int FENCE_FLAG_SYNC_NEXT    = 1 << 2;
+
+  public static final int FENCE_FLAG_REQUEST      = 1 << 31;
+
+  public static final int FENCE_FLAGS_SUPPORTED   = (FENCE_FLAG_BLOCK_BEFORE |
+                                                     FENCE_FLAG_BLOCK_AFTER |
+                                                     FENCE_FLAG_SYNC_NEXT |
+                                                     FENCE_FLAG_REQUEST);
+
+  //***************************************************************************
+  // Extended Clipboard
+  //***************************************************************************
+
+  // Formats
+  public static final int EXTCLIP_FORMAT_UTF8  = 1 << 0;
+  public static final int EXTCLIP_FORMAT_RTF   = 1 << 1;
+  public static final int EXTCLIP_FORMAT_HTML  = 1 << 2;
+  public static final int EXTCLIP_FORMAT_DIB   = 1 << 3;
+  public static final int EXTCLIP_FORMAT_FILES = 1 << 4;
+
+  public static final int EXTCLIP_FORMAT_MASK  = 0x0000ffff;
+
+  // Actions
+  public static final int EXTCLIP_ACTION_CAPS    = 1 << 24;
+  public static final int EXTCLIP_ACTION_REQUEST = 1 << 25;
+  public static final int EXTCLIP_ACTION_PEEK    = 1 << 26;
+  public static final int EXTCLIP_ACTION_NOTIFY  = 1 << 27;
+  public static final int EXTCLIP_ACTION_PROVIDE = 1 << 28;
+
+  public static final int EXTCLIP_ACTION_MASK    = 0xff000000;
 
   //***************************************************************************
   // Hextile subencoding types
@@ -296,6 +309,28 @@ public final class RFB {
   public static final int TIGHT_FILTER_GRADIENT = 0x02;
 
   //***************************************************************************
+  // Extended desktop size reason and result codes
+  //***************************************************************************
+
+  public static final int EDS_REASON_SERVER       = 0;
+  public static final int EDS_REASON_CLIENT       = 1;
+  public static final int EDS_REASON_OTHER_CLIENT = 2;
+
+  public static final int EDS_RESULT_SUCCESS      = 0;
+  public static final int EDS_RESULT_PROHIBITED   = 1;
+  public static final int EDS_RESULT_NO_RESOURCES = 2;
+  public static final int EDS_RESULT_INVALID      = 3;
+
+  //***************************************************************************
+  // LED states
+  //***************************************************************************
+
+  public static final int LED_SCROLL_LOCK = 1 << 0;
+  public static final int LED_NUM_LOCK    = 1 << 1;
+  public static final int LED_CAPS_LOCK   = 1 << 2;
+  public static final int LED_UNKNOWN     = -1;
+
+  //***************************************************************************
   // Button masks for PointerEvent
   //***************************************************************************
 
@@ -304,6 +339,8 @@ public final class RFB {
   public static final int BUTTON3_MASK = 4;
   public static final int BUTTON4_MASK = 8;
   public static final int BUTTON5_MASK = 16;
+  public static final int BUTTON6_MASK = 32;
+  public static final int BUTTON7_MASK = 64;
 
   //***************************************************************************
   // GII
@@ -371,6 +408,13 @@ public final class RFB {
   public static final int GII_DEVTYPE_ERASER = 3;
   public static final int GII_DEVTYPE_TOUCH  = 4;
   public static final int GII_DEVTYPE_PAD    = 5;
+
+  //***************************************************************************
+  // QEMU
+  //***************************************************************************
+
+  // Message subtypes
+  public static final int QEMU_EXTENDED_KEY_EVENT = 0;
 
   private RFB() {}
 };

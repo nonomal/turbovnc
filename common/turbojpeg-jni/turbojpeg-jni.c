@@ -1,20 +1,20 @@
-/*  Copyright (C)2011-2012, 2014-2015, 2017-2019, 2021 D. R. Commander.
- *                                                     All Rights Reserved.
+/* Copyright (C) 2011-2012, 2014-2015, 2017-2019, 2021, 2024
+ *           D. R. Commander.  All Rights Reserved.
  *
- *  This is free software; you can redistribute it and/or modify
- *  it under the terms of the GNU General Public License as published by
- *  the Free Software Foundation; either version 2 of the License, or
- *  (at your option) any later version.
+ * This is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
  *
- *  This software is distributed in the hope that it will be useful,
- *  but WITHOUT ANY WARRANTY; without even the implied warranty of
- *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- *  GNU General Public License for more details.
+ * This software is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  *
- *  You should have received a copy of the GNU General Public License
- *  along with this software; if not, write to the Free Software
- *  Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301,
- *  USA.
+ * You should have received a copy of the GNU General Public License
+ * along with this software; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301,
+ * USA.
  */
 
 #ifdef __SUNPRO_C
@@ -63,7 +63,7 @@ JNIEXPORT jlong JNICALL Java_com_turbovnc_rfb_TightDecoder_tjInitDecompress
     THROW(tjGetErrorStr());
 
 bailout:
-  return (jlong)handle;
+  return (jlong)(size_t)handle;
 }
 
 
@@ -88,7 +88,7 @@ static void decompress
   BAILIF0NOEC(jpegBuf = (*env)->GetPrimitiveArrayCritical(env, src, 0));
   BAILIF0NOEC(dstBuf = (*env)->GetPrimitiveArrayCritical(env, dst, 0));
 
-  if (tjDecompress2((tjhandle)handle, jpegBuf, (unsigned long)jpegSize,
+  if (tjDecompress2((tjhandle)(size_t)handle, jpegBuf, (unsigned long)jpegSize,
                     &dstBuf[y * actualPitch + x * tjPixelSize[pf]], width,
                     pitch, height, pf, flags) == -1) {
     SAFE_RELEASE(dst, dstBuf);
@@ -128,7 +128,7 @@ JNIEXPORT void JNICALL Java_com_turbovnc_rfb_TightDecoder_tjDestroy
   if (!handle)
     THROW("Invalid argument in tjDestroy()");
 
-  if (tjDestroy((tjhandle)handle) == -1) THROW(tjGetErrorStr());
+  if (tjDestroy((tjhandle)(size_t)handle) == -1) THROW(tjGetErrorStr());
 
 bailout:
   return;

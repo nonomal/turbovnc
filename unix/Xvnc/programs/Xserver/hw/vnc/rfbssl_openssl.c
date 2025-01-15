@@ -2,24 +2,23 @@
  * rfbssl_openssl.c - Secure socket funtions (openssl version)
  */
 
-/*
- *  Copyright (C) 2011 Gernot Tenchio
- *  Copyright (C) 2015, 2017-2020, 2022 D. R. Commander
+/* Copyright (C) 2015, 2017-2020, 2022, 2024 D. R. Commander
+ * Copyright (C) 2011 Gernot Tenchio
  *
- *  This is free software; you can redistribute it and/or modify
- *  it under the terms of the GNU General Public License as published by
- *  the Free Software Foundation; either version 2 of the License, or
- *  (at your option) any later version.
+ * This is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
  *
- *  This software is distributed in the hope that it will be useful,
- *  but WITHOUT ANY WARRANTY; without even the implied warranty of
- *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- *  GNU General Public License for more details.
+ * This software is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  *
- *  You should have received a copy of the GNU General Public License
- *  along with this software; if not, write to the Free Software
- *  Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307,
- *  USA.
+ * You should have received a copy of the GNU General Public License
+ * along with this software; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301,
+ * USA.
  */
 
 #include "rfb.h"
@@ -336,7 +335,7 @@ static void rfbErr(const char *format, ...)
 
 static void rfbssl_error(const char *function)
 {
-  char buf[1024];
+  char buf[BUFSIZE];
   unsigned long e = crypto.ERR_get_error();
 
   while (e) {
@@ -355,6 +354,7 @@ rfbSslCtx *rfbssl_init(rfbClientPtr cl, Bool anon)
   DSA *dsa = NULL;
   int flags = SSL_OP_NO_SSLv2 | SSL_OP_NO_SSLv3, priority = 0;
   const char *list = NULL;
+  char buf[BUFSIZE];
 
 #ifdef DLOPENSSL
   if (loadFunctions() == -1)
@@ -400,11 +400,13 @@ rfbSslCtx *rfbssl_init(rfbClientPtr cl, Bool anon)
       rfbssl_error("DH_generate_key()");
       goto bailout;
     }
-    rfbLog("Anonymous TLS key length: %d bits\n", crypto.DH_size(dh) * 8);
+    RFBLOGID("Anonymous TLS key length: %d bits\n", crypto.DH_size(dh) * 8);
     if (!ssl.SSL_CTX_ctrl(ctx->ssl_ctx, SSL_CTRL_SET_TMP_DH, 0, (char *)dh)) {
       rfbssl_error("SSL_CTX_set_tmp_dh()");
       goto bailout;
     }
+    crypto.DH_free(dh);
+    dh = NULL;
     if (!ssl.SSL_CTX_set_cipher_list(ctx->ssl_ctx, rfbAuthCipherSuites ?
                                                    rfbAuthCipherSuites :
                                                    "aNULL")) {
@@ -423,13 +425,13 @@ rfbSslCtx *rfbssl_init(rfbClientPtr cl, Bool anon)
       rfbErr("Unable to load X.509 certificate file %s\n", rfbAuthX509Cert);
       goto bailout;
     }
-    rfbLog("Using X.509 certificate file %s\n", rfbAuthX509Cert);
+    RFBLOGID("Using X.509 certificate file %s\n", rfbAuthX509Cert);
     if (ssl.SSL_CTX_use_PrivateKey_file(ctx->ssl_ctx, keyfile,
                                         SSL_FILETYPE_PEM) <= 0) {
       rfbErr("Unable to load X.509 private key file %s\n", keyfile);
       goto bailout;
     }
-    rfbLog("Using X.509 private key file %s\n", keyfile);
+    RFBLOGID("Using X.509 private key file %s\n", keyfile);
     if (rfbAuthCipherSuites) {
       if (!ssl.SSL_CTX_set_cipher_list(ctx->ssl_ctx, rfbAuthCipherSuites)) {
         rfbssl_error("SSL_CTX_set_cipher_list()");
@@ -442,14 +444,15 @@ rfbSslCtx *rfbssl_init(rfbClientPtr cl, Bool anon)
     rfbssl_error("SSL_new()");
     goto bailout;
   }
-  rfbLog("Available cipher suites: ");
+  snprintf(buf, BUFSIZE, "Available cipher suites: ");
   list = ssl.SSL_get_cipher_list(ctx->ssl, priority++);
   while (list) {
-    fprintf(stderr, "%s", list);
+    snprintf(&buf[strlen(buf)], BUFSIZE - strlen(buf), "%s", list);
     list = ssl.SSL_get_cipher_list(ctx->ssl, priority++);
-    if (list) fprintf(stderr, ":");
+    if (list) snprintf(&buf[strlen(buf)], BUFSIZE - strlen(buf), ":");
   }
-  fprintf(stderr, "\n");
+  snprintf(&buf[strlen(buf)], BUFSIZE - strlen(buf), "\n");
+  RFBLOGID("%s", buf);
   if (!(ssl.SSL_set_fd(ctx->ssl, cl->sock))) {
     rfbssl_error("SSL_set_fd()");
     goto bailout;
@@ -491,8 +494,8 @@ int rfbssl_accept(rfbClientPtr cl)
       rfbssl_error("SSL_accept()");
     return -1;
   }
-  rfbLog("Negotiated cipher suite: %s\n",
-         ssl.SSL_CIPHER_get_name(ssl.SSL_get_current_cipher(ctx->ssl)));
+  RFBLOGID("Negotiated cipher suite: %s\n",
+           ssl.SSL_CIPHER_get_name(ssl.SSL_get_current_cipher(ctx->ssl)));
 
   return 0;
 }

@@ -1,7 +1,8 @@
-/* Copyright (C) 2002-2005 RealVNC Ltd.  All Rights Reserved.
- * Copyright (C) 2011-2012 Brian P. Hinz
- * Copyright (C) 2012, 2014, 2016, 2018, 2020-2022 D. R. Commander.
+/* Copyright (C) 2012, 2014, 2016, 2018, 2020-2023 D. R. Commander.
  *                                                 All Rights Reserved.
+ * Copyright 2019 Pierre Ossman for Cendio AB
+ * Copyright (C) 2011-2012 Brian P. Hinz
+ * Copyright (C) 2002-2005 RealVNC Ltd.  All Rights Reserved.
  *
  * This is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -21,6 +22,8 @@
 
 package com.turbovnc.rfb;
 
+import java.nio.*;
+import java.nio.charset.*;
 import java.util.*;
 
 import com.turbovnc.network.*;
@@ -54,14 +57,14 @@ public abstract class CConnection extends CMsgHandler {
 
   // processMsg() should be called whenever there is data to read on the
   // InStream.  You must have called initialiseProtocol() first.
-  public void processMsg(boolean benchmark) {
+  public synchronized void processMsg(boolean benchmark) {
     switch (state) {
       case RFBSTATE_PROTOCOL_VERSION:  processVersionMsg();         break;
       case RFBSTATE_SECURITY_TYPES:    processSecurityTypesMsg();   break;
       case RFBSTATE_SECURITY:          processSecurityMsg();        break;
       case RFBSTATE_SECURITY_RESULT:   processSecurityResultMsg();  break;
       case RFBSTATE_INITIALISATION:    processInitMsg(benchmark);   break;
-      case RFBSTATE_NORMAL:            reader.readMsg();            break;
+      case RFBSTATE_NORMAL:            reader.readMsg(params);      break;
       case RFBSTATE_UNINITIALISED:
         throw new ErrorException("CConnection.processMsg: not initialised yet?");
       default:
@@ -127,7 +130,7 @@ public abstract class CConnection extends CMsgHandler {
     int secType = RFB.SECTYPE_INVALID;
 
     List<Integer> secTypes = new ArrayList<Integer>();
-    secTypes = opts.getEnabledSecTypes();
+    secTypes = params.secTypes.getEnabled();
 
     if (cp.isVersion(3, 3)) {
 
@@ -141,7 +144,7 @@ public abstract class CConnection extends CMsgHandler {
                  secType == RFB.SECTYPE_VNCAUTH) {
         Iterator<Integer> i;
         for (i = secTypes.iterator(); i.hasNext();) {
-          int refType = (Integer)i.next();
+          int refType = i.next();
           if (refType == secType) {
             secType = refType;
             break;
@@ -174,7 +177,7 @@ public abstract class CConnection extends CMsgHandler {
         if (serverSecType == RFB.SECTYPE_TIGHT)
           secType = RFB.SECTYPE_TIGHT;
 
-        if (opts.sessMgrActive && Params.sessMgrAuto.getValue())
+        if (params.sessMgrActive && params.sessMgrAuto.get())
           secType = RFB.SECTYPE_VNCAUTH;
 
         /*
@@ -183,7 +186,7 @@ public abstract class CConnection extends CMsgHandler {
          */
         if (secType == RFB.SECTYPE_INVALID && secType != RFB.SECTYPE_TIGHT) {
           for (Iterator<Integer> j = secTypes.iterator(); j.hasNext();) {
-            int refType = (Integer)j.next();
+            int refType = j.next();
             if (refType == serverSecType) {
               secType = refType;
               break;
@@ -208,7 +211,7 @@ public abstract class CConnection extends CMsgHandler {
     }
 
     state = RFBSTATE_SECURITY;
-    csecurity = security.getCSecurity(opts, secType);
+    csecurity = security.getCSecurity(params, secType);
     processSecurityMsg();
   }
 
@@ -275,8 +278,8 @@ public abstract class CConnection extends CMsgHandler {
 
   private void securityCompleted() {
     state = RFBSTATE_INITIALISATION;
-    reader = new CMsgReaderV3(this, is);
-    writer = new CMsgWriterV3(cp, os);
+    reader = new CMsgReader(this, is);
+    writer = new CMsgWriter(cp, os);
     vlog.debug("Authentication success!");
     //authSuccess();
     writer.writeClientInit(shared);
@@ -350,10 +353,29 @@ public abstract class CConnection extends CMsgHandler {
     clientSecTypeOrder = csto;
   }
 
+  // handleClipboardAnnounce() is called whenever the server's clipboard
+  // changes.  requestClipboard() should be called in order to access the
+  // actual data.
+
+  public abstract void handleClipboardAnnounce(boolean available);
+
+  // handleClipboardData() is called whenever the server has sent its clipboard
+  // data in response to a previous call to requestClipboard().  Note that this
+  // function might never be called if the clipboard data was no longer
+  // available when the server received the request.
+
+  public abstract void handleClipboardData(String data);
+
+  // handleClipboardRequest() is called whenever the server requests clipboard
+  // data from the client.  It will only be called after the client has first
+  // announced a clipboard change via announceClipboard().
+
+  public abstract void handleClipboardRequest();
+
   // Other methods
 
-  public CMsgReaderV3 reader() { return reader; }
-  public CMsgWriterV3 writer() { return writer; }
+  public CMsgReader reader() { return reader; }
+  public CMsgWriter writer() { return writer; }
 
   public InStream getInStream() { return is; }
   public OutStream getOutStream() { return os; }
@@ -410,10 +432,181 @@ public abstract class CConnection extends CMsgHandler {
     throw new ErrorException("getUserPasswd() called in base class (this shouldn't happen.)");
   }
 
+  // announceClipboard() informs the server that the client's clipboard has
+  // changed.  The server may later request the clipboard data via
+  // handleClipboardRequest().
+
+  public void announceClipboard(boolean available)
+  {
+    if (!params.sendClipboard.get())
+      return;
+
+    hasLocalClipboard = available;
+    unsolicitedClipboardAttempt = false;
+
+    // Attempt an unsolicited transfer?
+    if (available && cp.clipboardSize(RFB.EXTCLIP_FORMAT_UTF8) > 0 &&
+        (cp.clipboardFlags() & RFB.EXTCLIP_ACTION_PROVIDE) != 0) {
+      vlog.debug("Attempting unsolicited clipboard transfer...");
+      unsolicitedClipboardAttempt = true;
+      handleClipboardRequest();
+      return;
+    }
+
+    if ((cp.clipboardFlags() & RFB.EXTCLIP_ACTION_NOTIFY) != 0) {
+      writer().writeClipboardNotify(available ? RFB.EXTCLIP_FORMAT_UTF8 : 0);
+      return;
+    }
+
+    if (available)
+      handleClipboardRequest();
+  }
+
+  void handleClipboardCaps(int flags, int[] lengths)
+  {
+    int[] sizes = new int[]{ 0 };
+
+    super.handleClipboardCaps(flags, lengths);
+
+    writer().writeClipboardCaps(RFB.EXTCLIP_FORMAT_UTF8 |
+                                RFB.EXTCLIP_ACTION_REQUEST |
+                                RFB.EXTCLIP_ACTION_PEEK |
+                                RFB.EXTCLIP_ACTION_NOTIFY |
+                                RFB.EXTCLIP_ACTION_PROVIDE, sizes);
+  }
+
+  void handleClipboardNotify(int flags)
+  {
+    if (!params.recvClipboard.get())
+      return;
+
+    serverClipboard = null;
+
+    if ((flags & RFB.EXTCLIP_FORMAT_UTF8) != 0) {
+      hasLocalClipboard = false;
+      handleClipboardAnnounce(true);
+    } else {
+      handleClipboardAnnounce(false);
+    }
+  }
+
+  void handleClipboardPeek(int flags)
+  {
+    if (!params.sendClipboard.get())
+      return;
+
+    if ((cp.clipboardFlags() & RFB.EXTCLIP_ACTION_NOTIFY) != 0)
+      writer().writeClipboardNotify(hasLocalClipboard ?
+                                    RFB.EXTCLIP_FORMAT_UTF8 : 0);
+  }
+
+  void handleClipboardProvide(int flags, int[] lengths, byte[][] buffers)
+  {
+    if (!params.recvClipboard.get())
+      return;
+
+    if ((flags & RFB.EXTCLIP_FORMAT_UTF8) == 0) {
+      vlog.debug("Ignoring Extended Clipboard provide message with " +
+                 "unsupported formats 0x" + Integer.toHexString(flags));
+      return;
+    }
+
+    if (buffers[0][lengths[0] - 1] == 0)
+      lengths[0]--;
+    serverClipboard =
+      Utils.convertLF(new String(buffers[0], 0, lengths[0],
+                                 StandardCharsets.UTF_8));
+
+    // FIXME: Should probably verify that this data was actually requested
+    handleClipboardData(serverClipboard);
+  }
+
+  void handleClipboardRequest(int flags)
+  {
+    if (!params.sendClipboard.get())
+      return;
+
+    if ((flags & RFB.EXTCLIP_FORMAT_UTF8) == 0) {
+      vlog.debug("Ignoring Extended Clipboard request with unsupported " +
+                 "formats 0x" + Integer.toHexString(flags));
+      return;
+    }
+    if (!hasLocalClipboard) {
+      vlog.debug("Ignoring unexpected clipboard request");
+      return;
+    }
+    handleClipboardRequest();
+  }
+
+  // requestClipboard() requests clipboard data from the server.
+  // handleClipboardData() will be called once the data is available.
+
+  public void requestClipboard()
+  {
+    if (!params.recvClipboard.get())
+      return;
+
+    if (serverClipboard != null) {
+      handleClipboardData(serverClipboard);
+      return;
+    }
+
+    if ((cp.clipboardFlags() & RFB.EXTCLIP_ACTION_REQUEST) != 0)
+      writer().writeClipboardRequest(RFB.EXTCLIP_FORMAT_UTF8);
+  }
+
+  // sendClipboardData() transfers the client's clipboard data to the server
+  // and should be called whenever the server has requested the clipboard data
+  // via handleClipboardRequest().
+
+  public void sendClipboardData(String data)
+  {
+    if (!params.sendClipboard.get())
+      return;
+
+    if ((cp.clipboardFlags() & RFB.EXTCLIP_ACTION_PROVIDE) != 0) {
+      String filtered = Utils.convertCRLF(data);
+      int[] lengths = new int[1];
+      byte[][] datas = new byte[1][];
+
+      byte[] filteredBytes = filtered.getBytes(StandardCharsets.UTF_8);
+      lengths[0] = filteredBytes.length + 1;
+      datas[0] = new byte[filteredBytes.length + 1];
+      System.arraycopy(filteredBytes, 0, datas[0], 0, filteredBytes.length);
+
+      if (unsolicitedClipboardAttempt) {
+        unsolicitedClipboardAttempt = false;
+        if (lengths[0] > cp.clipboardSize(RFB.EXTCLIP_FORMAT_UTF8)) {
+          vlog.debug(lengths[0] +
+                     "-byte clipboard was too large for unsolicited transfer");
+          if ((cp.clipboardFlags() & RFB.EXTCLIP_ACTION_NOTIFY) != 0)
+            writer().writeClipboardNotify(RFB.EXTCLIP_FORMAT_UTF8);
+          return;
+        }
+      }
+
+      writer().writeClipboardProvide(RFB.EXTCLIP_FORMAT_UTF8, lengths, datas);
+    } else {
+      writer().writeClientCutText(data);
+    }
+  }
+
+  public void serverCutText(String str)
+  {
+    if (!params.recvClipboard.get())
+      return;
+
+    hasLocalClipboard = false;
+
+    serverClipboard = str;
+
+    handleClipboardAnnounce(true);
+  }
+
   InStream is;
   OutStream os;
-  protected CMsgReaderV3 reader;
-  CMsgWriterV3 writer;
+  protected CMsgReader reader;
+  CMsgWriter writer;
   boolean shared;
   protected CSecurity csecurity;
   SecurityClient security;
@@ -425,8 +618,12 @@ public abstract class CConnection extends CMsgHandler {
   protected Socket sock;
   boolean alreadyPrintedVersion, alreadyPrintedSecurity;
   boolean alreadyPrintedSecurityResult;
+
+  private boolean hasLocalClipboard, unsolicitedClipboardAttempt;
+  private String serverClipboard;
+
   // CHECKSTYLE VisibilityModifier:OFF
-  public Options opts;
+  public Params params;
   // CHECKSTYLE VisibilityModifier:ON
 
   static LogWriter vlog = new LogWriter("CConnection");

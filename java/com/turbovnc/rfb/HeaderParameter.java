@@ -1,4 +1,4 @@
-/* Copyright (C) 2017-2018 D. R. Commander.  All Rights Reserved.
+/* Copyright (C) 2017-2018, 2022-2023 D. R. Commander.  All Rights Reserved.
  *
  * This is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -20,25 +20,33 @@ package com.turbovnc.rfb;
 
 import com.turbovnc.rdr.ErrorException;
 
-public class HeaderParameter extends VoidParameter {
+public final class HeaderParameter extends VoidParameter {
 
-  public HeaderParameter(String name_, String desc_) {
-    super(name_, desc_);
+  public HeaderParameter(String name, Params params, String desc) {
+    super(name, params, false, desc);
   }
 
-  public final boolean setParam(String v) {
+  public boolean set(String str) {
     throw new ErrorException("Cannot set header parameter");
   }
 
-  public final void reset() {
+  public boolean setDefault(String str) {
+    throw new ErrorException("Cannot set default value for header parameter");
+  }
+
+  public void reset() {
     throw new ErrorException("Cannot reset header parameter");
   }
 
-  public final String getDefaultStr() {
+  public String getDefaultStr() {
     throw new ErrorException("Cannot get default string for header parameter");
   }
 
-  public final String getValues() {
+  public String getStr() {
+    throw new ErrorException("Cannot get string for header parameter");
+  }
+
+  public String getValues() {
     throw new ErrorException("Cannot get values for header parameter");
   }
 }

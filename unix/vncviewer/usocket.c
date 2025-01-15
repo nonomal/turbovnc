@@ -1,19 +1,19 @@
-/*  Copyright (C)2018 D. R. Commander.  All Rights Reserved.
+/* Copyright (C) 2018, 2022 D. R. Commander.  All Rights Reserved.
  *
- *  This is free software; you can redistribute it and/or modify
- *  it under the terms of the GNU General Public License as published by
- *  the Free Software Foundation; either version 2 of the License, or
- *  (at your option) any later version.
+ * This is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
  *
- *  This software is distributed in the hope that it will be useful,
- *  but WITHOUT ANY WARRANTY; without even the implied warranty of
- *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- *  GNU General Public License for more details.
+ * This software is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  *
- *  You should have received a copy of the GNU General Public License
- *  along with this software; if not, write to the Free Software
- *  Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301,
- *  USA.
+ * You should have received a copy of the GNU General Public License
+ * along with this software; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301,
+ * USA.
  */
 
 #include "com_jcraft_jsch_agentproxy_usocket_JNIUSocketFactory.h"
@@ -25,14 +25,14 @@
 #include <errno.h>
 
 
-#define bailif0(f) {  \
+#define BAILIF0(f) {  \
   if (!(f) || (*env)->ExceptionCheck(env))  \
     goto bailout;  \
 }
 
 #define _throwunix() {  \
   jclass _exccls = (*env)->FindClass(env, "java/io/IOException");  \
-  bailif0(_exccls);  \
+  BAILIF0(_exccls);  \
   (*env)->ThrowNew(env, _exccls, strerror(errno));  \
   goto bailout;  \
 }
@@ -75,7 +75,7 @@ JNIEXPORT jint JNICALL Java_com_jcraft_jsch_agentproxy_usocket_JNIUSocketFactory
   char *buf = NULL;
   size_t retval = 0;
 
-  bailif0(buf = (*env)->GetPrimitiveArrayCritical(env, jbuf, 0));
+  BAILIF0(buf = (*env)->GetPrimitiveArrayCritical(env, jbuf, 0));
   if ((retval = read(fd, buf, len)) <= 0)
     _throwunix();
 
@@ -90,7 +90,7 @@ JNIEXPORT void JNICALL Java_com_jcraft_jsch_agentproxy_usocket_JNIUSocketFactory
 {
   char *buf = NULL;
 
-  bailif0(buf = (*env)->GetPrimitiveArrayCritical(env, jbuf, 0));
+  BAILIF0(buf = (*env)->GetPrimitiveArrayCritical(env, jbuf, 0));
   if (write(fd, buf, len) < 0)
     _throwunix();
 

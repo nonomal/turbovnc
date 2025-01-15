@@ -1,5 +1,6 @@
-/* Copyright (C) 2002-2005 RealVNC Ltd.  All Rights Reserved.
- * Copyright (C) 2012, 2016, 2018, 2020 D. R. Commander.  All Rights Reserved.
+/* Copyright (C) 2012, 2016, 2018, 2020, 2022-2024 D. R. Commander.
+ *                                                 All Rights Reserved.
+ * Copyright (C) 2002-2005 RealVNC Ltd.  All Rights Reserved.
  *
  * This is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -23,57 +24,87 @@ import com.turbovnc.rdr.*;
 
 public final class Hostname {
 
-  public static String getHost(String vncServerName) {
+  // Find the position of the first colon in the display number/port/UDS
+  // portion of the VNC server name.
+
+  public static int getColonPos(String vncServerName) {
     int colonPos = vncServerName.lastIndexOf(':');
     int bracketPos = vncServerName.lastIndexOf(']');
-    boolean doubleColon = false;
+    int atPos = vncServerName.lastIndexOf('@');
 
+    // No colon = hostname only
+    if (colonPos == -1 || colonPos < atPos)
+      return -1;
+    // Last colon is inside square brackets = IPv6 address only
     if (bracketPos != -1 && colonPos < bracketPos)
-      colonPos = -1;
-    while (colonPos > 0 && vncServerName.charAt(colonPos - 1) == ':') {
+      return -1;
+    // If the last colon is part of a series, then find the first colon in the
+    // series.
+    while (colonPos > 0 && vncServerName.charAt(colonPos - 1) == ':')
       colonPos--;
-      doubleColon = true;
+    if (colonPos == atPos + 1) {
+      // IPv6 loopback address only (special case)
+      if (vncServerName.regionMatches(atPos + 1, "::1", 0, 3))
+        return -1;
+      // Display number/port/UDS specified without host
+      return colonPos;
     }
-    if (doubleColon) {
-      // Check for preceding single colon, indicating an IPv6 address
-      for (int p = colonPos - 1; p >= 0; p--) {
-        if (vncServerName.charAt(p) == ':') {
-          if (p == 0 || vncServerName.charAt(p - 1) != ':')
-            colonPos = -1;
-          break;
-        }
-      }
+    // Display number/port/UDS specified with bracketed IPv6 address
+    if (bracketPos != -1 && colonPos - 1 == bracketPos)
+      return colonPos;
+
+    // Check for preceding colons, indicating an IPv6 address.
+    int colonCount = 0, p = colonPos;
+    while ((p = vncServerName.lastIndexOf(':', p - 1)) > 0) {
+      // Double colon = abbreviated IPv6 address
+      if (vncServerName.charAt(p - 1) == ':')
+        return colonPos;
+      colonCount++;
+      // 7 colons = full IPv6 address
+      if (colonCount >= 7)
+        return colonPos;
     }
-    if (colonPos == 0)
+    // Invalid format (IPv6 address is incomplete or hostname contains colons)
+    if (colonCount > 0)
+      return -1;
+
+    // Display number/port/UDS specified with hostname
+    return colonPos;
+  }
+
+  public static String getSSHUser(String vncServerName) {
+    int atPos = vncServerName.lastIndexOf('@');
+    String sshUser = null;
+
+    if (atPos >= 0) {
+      sshUser = vncServerName.substring(0, atPos).replaceAll("\\s", "");
+      if (sshUser.length() > 0)
+        return sshUser;
+    }
+    return null;
+  }
+
+  public static String getHost(String vncServerName) {
+    int colonPos = getColonPos(vncServerName);
+    int atPos = vncServerName.lastIndexOf('@');
+
+    if (colonPos == atPos + 1)
       return "localhost";
-    if (colonPos == -1)
+    if (colonPos == -1 || colonPos < atPos)
       colonPos = vncServerName.length();
-    return vncServerName.substring(0, colonPos).replaceAll("\\s", "");
+    return vncServerName.substring(atPos + 1, colonPos).replaceAll("\\s", "");
   }
 
   public static int getPort(String vncServerName) {
-    int colonPos = vncServerName.lastIndexOf(':');
-    int bracketPos = vncServerName.lastIndexOf(']');
-    boolean doubleColon = false;
+    int colonPos = getColonPos(vncServerName);
 
-    if (bracketPos != -1 && colonPos < bracketPos)
-      colonPos = -1;
-    while (colonPos > 0 && vncServerName.charAt(colonPos - 1) == ':') {
-      colonPos--;
-      doubleColon = true;
-    }
-    if (doubleColon) {
-      // Check for preceding single colon, indicating an IPv6 address
-      for (int p = colonPos - 1; p >= 0; p--) {
-        if (vncServerName.charAt(p) == ':') {
-          if (p == 0 || vncServerName.charAt(p - 1) != ':')
-            colonPos = -1;
-          break;
-        }
-      }
-    }
     if (colonPos == -1 || colonPos == vncServerName.length() - 1)
       return Utils.getBooleanProperty("turbovnc.sessmgr", true) ? 0 : 5900;
+
+    String substring = vncServerName.substring(colonPos);
+    if (substring.startsWith("::/") || substring.startsWith("::~/"))
+      return -1;
+
     if (vncServerName.charAt(colonPos + 1) == ':') {
       try {
         return Integer.parseInt(vncServerName.substring(colonPos + 2));
@@ -89,6 +120,19 @@ public final class Hostname {
     } catch (NumberFormatException e) {
       throw new ErrorException("Invalid VNC server specified.");
     }
+  }
+
+  public static String getUDSPath(String vncServerName) {
+    int colonPos = getColonPos(vncServerName);
+
+    if (colonPos == -1 || colonPos == vncServerName.length() - 1)
+      return null;
+
+    String substring = vncServerName.substring(colonPos);
+    if (!substring.startsWith("::/") && !substring.startsWith("::~/"))
+      return null;
+
+    return vncServerName.substring(colonPos + 2);
   }
 
   private Hostname() {}

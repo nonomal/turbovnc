@@ -1,23 +1,24 @@
-/*  Copyright (C) 1999 AT&T Laboratories Cambridge.  All Rights Reserved.
- *  Copyright (C) 2000 Const Kaplinsky.  All Rights Reserved.
- *  Copyright (C) 2012-2015, 2017-2018, 2020-2022 D. R. Commander.
- *                                                All Rights Reserved.
- *  Copyright (C) 2012, 2016 Brian P. Hinz.  All Rights Reserved.
+/* Copyright (C) 2012-2015, 2017-2018, 2020-2025 D. R. Commander.
+ *                                               All Rights Reserved.
+ * Copyright (C) 2021 Steffen Kieß
+ * Copyright (C) 2012, 2016 Brian P. Hinz.  All Rights Reserved.
+ * Copyright (C) 2000 Const Kaplinsky.  All Rights Reserved.
+ * Copyright (C) 1999 AT&T Laboratories Cambridge.  All Rights Reserved.
  *
- *  This is free software; you can redistribute it and/or modify
- *  it under the terms of the GNU General Public License as published by
- *  the Free Software Foundation; either version 2 of the License, or
- *  (at your option) any later version.
+ * This is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
  *
- *  This software is distributed in the hope that it will be useful,
- *  but WITHOUT ANY WARRANTY; without even the implied warranty of
- *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- *  GNU General Public License for more details.
+ * This software is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  *
- *  You should have received a copy of the GNU General Public License
- *  along with this software; if not, write to the Free Software
- *  Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301,
- *  USA.
+ * You should have received a copy of the GNU General Public License
+ * along with this software; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301,
+ * USA.
  */
 
 /*
@@ -26,7 +27,7 @@
 
 package com.turbovnc.vncviewer;
 
-import java.io.File;
+import java.io.*;
 import java.util.*;
 
 import com.turbovnc.rfb.*;
@@ -36,35 +37,30 @@ import com.turbovnc.network.*;
 import com.jcraft.jsch.agentproxy.*;
 import com.jcraft.jsch.agentproxy.connector.*;
 import com.jcraft.jsch.agentproxy.usocket.*;
+import com.jcraft.jsch.Identity;
 import com.jcraft.jsch.*;
 
 public class Tunnel {
 
-  public static void createTunnel(Options opts) throws Exception {
-    int localPort;
-    int remotePort;
-    String gatewayHost;
-    String remoteHost;
+  public static void createTunnel(Params params) throws Exception {
+    int localPort, remotePort;
+    String gatewayHost, remoteHost;
 
-    boolean tunnel = opts.tunnel ||
-                     (opts.sessMgrActive && Params.sessMgrAuto.getValue());
-
-    localPort = TcpSocket.findFreeTcpPort();
-    if (localPort == 0)
-      throw new ErrorException("Could not obtain free TCP port");
+    boolean tunnel = params.tunnel.get() ||
+                     (params.sessMgrActive && params.sessMgrAuto.get());
 
     if (tunnel) {
-      gatewayHost = Hostname.getHost(opts.serverName);
+      gatewayHost = Hostname.getHost(params.server.get());
       remoteHost = "localhost";
     } else {
-      gatewayHost = opts.via;
-      remoteHost = Hostname.getHost(opts.serverName);
+      gatewayHost = params.via.get();
+      remoteHost = Hostname.getHost(params.server.get());
     }
-    if (opts.serverName != null && opts.serverName.indexOf(':') < 0 &&
-        opts.port > 0)
-      remotePort = opts.port;
+    if (params.server.get() != null &&
+        Hostname.getColonPos(params.server.get()) < 0 && params.port.get() > 0)
+      remotePort = params.port.get();
     else
-      remotePort = Hostname.getPort(opts.serverName);
+      remotePort = Hostname.getPort(params.server.get());
 
     String pattern = null;
     if (tunnel) {
@@ -77,24 +73,37 @@ public class Tunnel {
         pattern = System.getenv("VNC_VIA_CMD");
     }
 
-    if (Params.extSSH.getValue() || (pattern != null && pattern.length() > 0))
-      createTunnelExt(gatewayHost, remoteHost, remotePort, localPort, pattern,
-                      opts, tunnel);
-    else {
-      vlog.debug("Opening SSH tunnel through gateway " + gatewayHost);
-      if (opts.sshSession == null)
-        createTunnelJSch(gatewayHost, opts);
-      vlog.debug("Forwarding local port " + localPort + " to " + remoteHost +
-                 ":" + remotePort + " (relative to gateway)");
-      opts.sshSession.setPortForwardingL(localPort, remoteHost, remotePort);
+    if (params.udsPath != null &&
+        (pattern == null || pattern.indexOf("%L") < 0)) {
+      // Connect to Unix domain socket using stdio-based forwarding
+      params.stdioSocket = createTunnelExtUDS(gatewayHost, remoteHost, pattern,
+                                              params, tunnel);
+    } else {
+      localPort = TcpSocket.findFreeTcpPort();
+      if (localPort == 0)
+        throw new ErrorException("Could not obtain free TCP port");
+
+      if (params.extSSH.get() || (pattern != null && pattern.length() > 0))
+        createTunnelExt(gatewayHost, remoteHost, remotePort, localPort,
+                        pattern, params, tunnel);
+      else {
+        vlog.debug("Opening SSH tunnel through gateway " + gatewayHost);
+        if (params.sshSession == null)
+          createTunnelJSch(gatewayHost, params);
+        remoteHost = remoteHost.replaceAll("[\\[\\]]", "");
+        vlog.debug("Forwarding local port " + localPort + " to " + remoteHost +
+                   "::" + remotePort + " (relative to gateway)");
+        params.sshSession.setPortForwardingL(localPort, remoteHost,
+                                             remotePort);
+      }
+      params.server.set("localhost::" + localPort);
     }
-    opts.serverName = "localhost::" + localPort;
-    opts.sshTunnelActive = true;
+    params.sshTunnelActive = true;
   }
 
-  /* Create a tunnel using the builtin JSch SSH client */
+  /* Create a tunnel using the built-in JSch SSH client */
 
-  protected static void createTunnelJSch(String host, Options opts)
+  protected static void createTunnelJSch(String host, Params params)
                                          throws Exception {
     JSch jsch = new JSch();
     JSch.setLogger(LOGGER);
@@ -122,15 +131,16 @@ public class Tunnel {
         if (connector != null) {
           IdentityRepository repo = new RemoteIdentityRepository(connector);
           vlog.sshdebug("SSH private keys offered by agent:");
-          Iterator<com.jcraft.jsch.Identity> iter =
-            repo.getIdentities().iterator();
+          Iterator<Identity> iter = repo.getIdentities().iterator();
           while (iter.hasNext()) {
-            com.jcraft.jsch.Identity id = iter.next();
+            Identity id = iter.next();
             vlog.sshdebug("  " + id.getName());
             if (id.getFingerPrint() != null)
               vlog.sshdebug("    Fingerprint: " + id.getFingerPrint());
           }
-          jsch.setIdentityRepository(repo);
+          LocalIdentityRepository localRepo =
+            (LocalIdentityRepository)jsch.getIdentityRepository();
+          localRepo.copyFrom(repo);
         }
       } catch (Exception e) {
         if (Utils.isWindows())
@@ -142,11 +152,11 @@ public class Tunnel {
     }
 
     ArrayList<File> privateKeys = new ArrayList<File>();
-    String sshKeyFile = Params.sshKeyFile.getValue();
-    String sshKey = Params.sshKey.getValue();
+    String sshKeyFile = params.sshKeyFile.get();
+    String sshKey = params.sshKey.get();
     boolean useDefaultPrivateKeyFiles = false;
     if (sshKey != null) {
-      String sshKeyPass = Params.sshKeyPass.getValue();
+      String sshKeyPass = params.sshKeyPass.get();
       byte[] keyPass = null, key;
       if (sshKeyPass != null)
         keyPass = sshKeyPass.getBytes();
@@ -164,24 +174,21 @@ public class Tunnel {
     }
 
     // username and passphrase will be given via UserInfo interface.
-    int port = Params.sshPort.getValue();
-    String user = opts.sshUser;
-    if (user == null)
-      user = (String)System.getProperties().get("user.name");
+    int port = params.sshPort.get();
+    String user = params.sshUser.get();
 
-    File sshConfigFile = new File(Params.sshConfig.getValue());
+    File sshConfigFile = new File(params.sshConfig.get());
     if (sshConfigFile.exists() && sshConfigFile.canRead()) {
       ConfigRepository repo =
         OpenSSHConfig.parseFile(sshConfigFile.getAbsolutePath());
       jsch.setConfigRepository(repo);
-      vlog.debug("Read OpenSSH config file " + Params.sshConfig.getValue());
-      // This just ensures that the password dialog displays the correct
-      // username.  JSch will ignore the username and port passed to
-      // getSession() if the configuration has already been set using an
-      // OpenSSH configuration file.
+      vlog.debug("Read OpenSSH config file " + params.sshConfig.get());
       String repoUser = repo.getConfig(host).getUser();
-      if (repoUser != null)
+      if (repoUser != null && user == null)
         user = repoUser;
+      int repoPort = repo.getConfig(host).getPort();
+      if (repoPort != -1 && params.sshPort.isDefault())
+        port = repoPort;
       String[] identityFiles = repo.getConfig(host).getValues("IdentityFile");
       if (identityFiles != null) {
         for (String file : identityFiles) {
@@ -190,27 +197,33 @@ public class Tunnel {
         }
       }
     } else {
-      if (Params.sshConfig.isDefault()) {
+      if (params.sshConfig.isDefault()) {
         vlog.debug("Could not parse SSH config file " +
-                   Params.sshConfig.getValue());
+                   params.sshConfig.get());
       } else {
-        vlog.info("Could not parse SSH config file " +
-                  Params.sshConfig.getValue());
+        vlog.info("Could not parse SSH config file " + params.sshConfig.get());
       }
+    }
+
+    if (user == null) {
+      user = (String)System.getProperties().get("user.name");
+      if (params.localUsernameLC.get())
+        user = user.toLowerCase();
     }
 
     if (useDefaultPrivateKeyFiles) {
       privateKeys.add(new File(homeDir + "/.ssh/id_rsa"));
       privateKeys.add(new File(homeDir + "/.ssh/id_dsa"));
+      privateKeys.add(new File(homeDir + "/.ssh/id_ecdsa"));
     }
 
     for (Iterator<File> i = privateKeys.iterator(); i.hasNext();) {
-      File privateKey = (File)i.next();
+      File privateKey = i.next();
       try {
         if (privateKey.exists() && privateKey.canRead()) {
-          if (Params.sshKeyPass.getValue() != null)
+          if (params.sshKeyPass.get() != null)
             jsch.addIdentity(privateKey.getAbsolutePath(),
-                             Params.sshKeyPass.getValue());
+                             params.sshKeyPass.get());
           else
             jsch.addIdentity(privateKey.getAbsolutePath());
         }
@@ -221,42 +234,52 @@ public class Tunnel {
       }
     }
 
-    opts.sshSession = jsch.getSession(user, host, port);
+    params.sshSession = jsch.getSession(user, host, port);
+
+    vlog.sshdebug("Attempting to use the following SSH private keys:");
+    Iterator<Identity> iter =
+      params.sshSession.getIdentityRepository().getIdentities().iterator();
+    while (iter.hasNext()) {
+      Identity id = iter.next();
+      vlog.sshdebug("  " + id.getName());
+      if (id.getFingerPrint() != null)
+        vlog.sshdebug("    Fingerprint: " + id.getFingerPrint());
+    }
+
     // OpenSSHConfig doesn't recognize StrictHostKeyChecking
-    if (opts.sshSession.getConfig("StrictHostKeyChecking") == null)
-      opts.sshSession.setConfig("StrictHostKeyChecking", "ask");
-    opts.sshSession.setConfig("MaxAuthTries", "3");
+    if (params.sshSession.getConfig("StrictHostKeyChecking") == null)
+      params.sshSession.setConfig("StrictHostKeyChecking", "ask");
+    params.sshSession.setConfig("MaxAuthTries", "3");
     String auth = System.getProperty("turbovnc.sshauth");
-    if (auth == null)
-      auth = "publickey,keyboard-interactive,password";
-    opts.sshSession.setConfig("PreferredAuthentications", auth);
+    if (auth != null)
+      params.sshSession.setConfig("PreferredAuthentications", auth);
     PasswdDialog dlg = new PasswdDialog(new String("SSH Authentication"),
                                         true, user, false, true, -1);
-    opts.sshSession.setUserInfo(dlg);
-    opts.sshSession.connect();
+    if (!Utils.getBooleanProperty("turbovnc.sshkeytest", false))
+      params.sshSession.setUserInfo(dlg);
+    params.sshSession.connect();
   }
 
   /* Create a tunnel using an external SSH client.  This supports the same
      VNC_TUNNEL_CMD and VNC_VIA_CMD environment variables as the native viewers
      do. */
 
-  private static final String DEFAULT_SSH_CMD =
-    (Utils.isWindows() ? "ssh.exe" : "/usr/bin/ssh");
   private static final String DEFAULT_TUNNEL_CMD =
-    DEFAULT_SSH_CMD + " -f -L %L:localhost:%R %H sleep 20";
+    "%S -f -L %L:localhost:%R %H sleep 20";
   private static final String DEFAULT_VIA_CMD =
-    DEFAULT_SSH_CMD + " -f -L %L:%H:%R %G sleep 20";
+    "%S -f -L %L:%H:%R %G sleep 20";
 
   private static void createTunnelExt(String gatewayHost, String remoteHost,
                                       int remotePort, int localPort,
-                                      String pattern, Options opts,
+                                      String pattern, Params params,
                                       boolean tunnel)
                                       throws Exception {
     if (pattern == null || pattern.length() < 1)
       pattern = (tunnel ? DEFAULT_TUNNEL_CMD : DEFAULT_VIA_CMD);
 
     String command = fillCmdPattern(pattern, gatewayHost, remoteHost,
-                                    remotePort, localPort, opts, tunnel);
+                                    remotePort, params.udsPath, localPort,
+                                    params, tunnel);
 
     vlog.debug("SSH command line: " + command);
     List<String> args = ArgumentTokenizer.tokenize(command);
@@ -269,20 +292,71 @@ public class Tunnel {
       throw new ErrorException("External SSH error");
   }
 
+  private static final String DEFAULT_TUNNEL_CMD_UDS =
+    "%S -- %H exec socat stdio unix-connect:%R";
+  private static final String DEFAULT_VIA_CMD_UDS =
+    "%S -J %G -- %H exec socat stdio unix-connect:%R";
+
+  private static Socket createTunnelExtUDS(String gatewayHost,
+                                           String remoteHost, String pattern,
+                                           Params params, boolean tunnel)
+                                           throws Exception {
+    if (pattern == null || pattern.length() < 1)
+      pattern = (tunnel ? DEFAULT_TUNNEL_CMD_UDS : DEFAULT_VIA_CMD_UDS);
+
+    // Escape the Unix domain socket path twice, since it will be interpreted
+    // once by ArgumentTokenizer.tokenize() and again by the remote shell.
+    String udsPath = escapeUDSPath(params.udsPath, true);
+    udsPath = escapeUDSPath(udsPath, false);
+
+    String command = fillCmdPattern(pattern, gatewayHost, remoteHost, -1,
+                                    udsPath, -1, params, tunnel);
+
+    vlog.debug("SSH command line (stdio): " + command);
+    List<String> args = ArgumentTokenizer.tokenize(command);
+    ProcessBuilder pb = new ProcessBuilder(args);
+    pb.redirectError(ProcessBuilder.Redirect.INHERIT);
+    Process p = pb.start();
+    if (p == null)
+      throw new ErrorException("External SSH error");
+    return new StreamSocket(p.getInputStream(), p.getOutputStream(), true);
+  }
+
+  protected static Socket connectUDSDirect(String udsPath) {
+    udsPath = expandUDSPathLocal(udsPath);
+
+    vlog.debug("Connecting to Unix domain socket: " + udsPath);
+    try {
+      ProcessBuilder pb =
+        new ProcessBuilder("socat", "stdio",
+                           "unix-connect:\"" + udsPath + "\"");
+      pb.redirectError(ProcessBuilder.Redirect.INHERIT);
+      Process p = pb.start();
+      if (p == null)
+        throw new ErrorException("socat error");
+      return new StreamSocket(p.getInputStream(), p.getOutputStream(), true);
+    } catch (Exception e) {
+      throw new ErrorException("Could not start socat:\n" + e.getMessage());
+    }
+  }
+
   private static String fillCmdPattern(String pattern, String gatewayHost,
                                        String remoteHost, int remotePort,
-                                       int localPort, Options opts,
-                                       boolean tunnel) {
+                                       String udsPath, int localPort,
+                                       Params params, boolean tunnel) {
     int i, j;
     boolean hFound = false, gFound = false, rFound = false, lFound = false;
     String command = "";
 
-    if (opts.sshUser != null)
-      gatewayHost = opts.sshUser + "@" + gatewayHost;
+    if (params.sshUser.get() != null)
+      gatewayHost = params.sshUser.get() + "@" + gatewayHost;
 
     for (i = 0; i < pattern.length(); i++) {
       if (pattern.charAt(i) == '%') {
         switch (pattern.charAt(++i)) {
+          case 'S':
+            command += params.extSSHCommand.get();
+            continue;
           case 'H':
             command += (tunnel ? gatewayHost : remoteHost);
             hFound = true;
@@ -292,7 +366,10 @@ public class Tunnel {
             gFound = true;
             continue;
           case 'R':
-            command += remotePort;
+            if (udsPath != null)
+              command += udsPath;
+            else
+              command += remotePort;
             rFound = true;
             continue;
           case 'L':
@@ -304,13 +381,121 @@ public class Tunnel {
       command += pattern.charAt(i);
     }
 
-    if (!hFound || !rFound || !lFound)
+    if (!hFound || !rFound || (!lFound && udsPath == null))
       throw new ErrorException("%H, %R or %L absent in tunneling command template.");
 
     if (!tunnel && !gFound)
       throw new ErrorException("%G pattern absent in tunneling command template.");
 
     return command;
+  }
+
+  // Escape a remote Unix domain socket path so that it can survive being
+  // parsed by a POSIX shell on the host or by ArgumentTokenizer.tokenize().
+  // Expand ~ to the remote home directory, %h to the remote host name, %i to
+  // the remote (numeric) user ID, and %u to the remote username.
+  private static String escapeUDSPath(String udsPath, boolean expandTokens) {
+    String result = "'";
+
+    for (int i = 0; i < udsPath.length(); i++) {
+      if (udsPath.charAt(i) == '\'') {
+        // Replace ' with '"'"'
+        result += "'\"'\"'";
+        continue;
+      }
+      if (expandTokens) {
+        if (i == 0 && udsPath.charAt(i) == '~') {
+          result += "'\"$HOME\"'";
+          continue;
+        } else if (udsPath.charAt(i) == '%') {
+          switch (udsPath.charAt(++i)) {
+            case '%':
+              break;
+            case 'h':
+              result += "'\"$(uname -n)\"'";
+              continue;
+            case 'i':
+              result += "'\"$(id -u)\"'";
+              continue;
+            case 'u':
+              result += "'\"$(id -u -n)\"'";
+              continue;
+            default:
+              throw new ErrorException("Invalid % sequence (%" +
+                                       udsPath.charAt(i) +
+                                       ") in Unix domain socket path");
+          }
+        }
+      }
+      result += udsPath.charAt(i);
+    }
+    result += "'";
+
+    return result;
+  }
+
+  // Expand a local (client-side) Unix domain socket path similarly to
+  // escapeUDSPath()
+  private static String expandUDSPathLocal(String udsPath) {
+    String result = "";
+
+    for (int i = 0; i < udsPath.length(); i++) {
+      if (i == 0 && udsPath.charAt(i) == '~') {
+        result += System.getProperty("user.home");
+        continue;
+      } else if (udsPath.charAt(i) == '%') {
+        switch (udsPath.charAt(++i)) {
+          case '%':
+            break;
+          case 'h':
+            try {
+              ProcessBuilder pb = new ProcessBuilder("uname", "-n");
+              pb.redirectInput(ProcessBuilder.Redirect.INHERIT);
+              pb.redirectError(ProcessBuilder.Redirect.INHERIT);
+              Process p = pb.start();
+              if (p == null)
+                throw new ErrorException("error calling 'uname -n'");
+              String id = new BufferedReader(
+                new InputStreamReader(p.getInputStream())).readLine();
+              p.getOutputStream().close();
+              p.waitFor();
+              result += id;
+            } catch (Exception e) {
+              throw new ErrorException("Could run 'uname -n':\n" +
+                                       e.getMessage());
+            }
+            continue;
+          case 'i':
+            try {
+              ProcessBuilder pb = new ProcessBuilder("id", "-u");
+              pb.redirectInput(ProcessBuilder.Redirect.INHERIT);
+              pb.redirectError(ProcessBuilder.Redirect.INHERIT);
+              Process p = pb.start();
+              if (p == null)
+                throw new ErrorException("error calling 'id -u'");
+              String id = new BufferedReader(
+                new InputStreamReader(p.getInputStream())).readLine();
+              p.getOutputStream().close();
+              p.waitFor();
+              result += id;
+            } catch (Exception e) {
+              throw new ErrorException("Could run 'id -u':\n" +
+                                       e.getMessage());
+            }
+            continue;
+          case 'u':
+            result += System.getProperty("user.name");
+            continue;
+          default:
+            throw new ErrorException("Invalid % sequence (%" +
+                                     udsPath.charAt(i) +
+                                     ") in Unix domain socket path");
+        }
+      }
+      result += udsPath.charAt(i);
+    }
+
+    return result;
   }
 
   // JSch logging interface

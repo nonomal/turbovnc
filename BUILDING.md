@@ -14,8 +14,8 @@ Build Requirements
     Server.)
 
 - libjpeg-turbo SDK v1.2 or later
-  * The libjpeg-turbo SDK binary packages can be downloaded from the "Files"
-    area of <http://sourceforge.net/projects/libjpeg-turbo>.
+  * The libjpeg-turbo SDK binary packages can be downloaded from
+    <https://github.com/libjpeg-turbo/libjpeg-turbo/releases>.
   * The TurboVNC build system will search for the TurboJPEG header and library
     under __/opt/libjpeg-turbo__ on Un\*x or __c:\libjpeg-turbo[64]__ (Visual
     C++) or __c:\libjpeg-turbo-gcc[64]__ (MinGW) on Windows, but you can
@@ -121,8 +121,8 @@ TurboVNC Server build is enabled (which is the default on Un*x platforms other
 than Mac), then this procedure will build the TurboVNC Server and a handful of
 C applications that are used to interface with it.  On most 64-bit systems
 (Solaris being a notable exception), this will build a 64-bit version of
-TurboVNC.  See "Build Recipes" for specific instructions on how to build a
-32-bit or 64-bit version of TurboVNC on systems that support both.
+TurboVNC.  (See "Build Recipes" for specific instructions on how to build a
+64-bit version of TurboVNC on Solaris.)
 
     cd {build_directory}
     cmake -G"Unix Makefiles" [additional CMake flags] {source_directory}
@@ -181,17 +181,33 @@ directly with libssl and libcrypto by adding `-DTVNC_DLOPENSSL=0` to the CMake
 command line.
 
 
+### Distribution-Specific Build
+
+By default, the build system builds TurboVNC binaries that can run on multiple
+O/S distributions.  This involves building some of the X.org dependencies,
+which are included in the TurboVNC source tree, and statically linking TurboVNC
+with those and other dependencies.  Distribution-specific dynamically-linked
+TurboVNC binaries can instead be built by changing the values of the following
+CMake variables:
+
+- `TJPEG_INCLUDE_DIR`
+- `TJPEG_LIBRARY`
+- `TVNC_DLOPENSSL`
+- `TVNC_STATIC_XORG_PATHS`
+- `TVNC_SYSTEMLIBS`
+- `TVNC_SYSTEMX11`
+- `XKB_BASE_DIRECTORY`
+- `XKB_BIN_DIRECTORY`
+- `XORG_DRI_DRIVER_PATH`
+- `XORG_FONT_PATH`
+- `XORG_REGISTRY_PATH`
+
+Use `ccmake` or `cmake-gui`, as described below, to view documentation for
+those variables.
+
+
 Build Recipes
 -------------
-
-
-### 32-bit Build on 64-bit Linux/Unix (including Mac)
-
-Use export/setenv to set the following environment variables before running
-CMake:
-
-    CFLAGS=-m32
-    LDFLAGS=-m32
 
 
 ### 64-bit Build on Solaris
@@ -266,15 +282,6 @@ in __${CMAKE\_INSTALL\_PREFIX}/doc__.)  If a directory variable contains the
 name of another directory variable in angle brackets, then its final value will
 depend on the final value of that other variable.  For instance, the default
 value of `CMAKE_INSTALL_MANDIR` is `<CMAKE_INSTALL_DATAROOTDIR>/man`.
-
-NOTE: If setting one of these directory variables to a relative path using the
-CMake command line, you must specify that the variable is of type `PATH`.
-For example:
-
-    cmake -G"{generator type}" -DCMAKE_INSTALL_JAVADIR:PATH=java {source_directory}
-
-Otherwise, CMake will assume that the path is relative to the build directory
-rather than the install directory.
 
 
 Creating Distribution Packages

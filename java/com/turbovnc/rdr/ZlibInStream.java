@@ -1,6 +1,6 @@
-/* Copyright (C) 2002-2005 RealVNC Ltd.  All Rights Reserved.
+/* Copyright (C) 2012, 2018 D. R. Commander.  All Rights Reserved.
  * Copyright (C) 2011 Brian P. Hinz
- * Copyright (C) 2012, 2018 D. R. Commander.  All Rights Reserved.
+ * Copyright (C) 2002-2005 RealVNC Ltd.  All Rights Reserved.
  *
  * This is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -102,6 +102,9 @@ public class ZlibInStream extends InStream {
   // stream.
 
   private boolean decompress(boolean wait) {
+    if (zs.inflateFinished())
+      throw new ErrorException("ZlibInStream: unexpected end of zlib stream");
+
     zs.next_out = b;
     zs.next_out_index = end;
     zs.avail_out = start + bufSize - end;
@@ -115,7 +118,7 @@ public class ZlibInStream extends InStream {
       zs.avail_in = bytesIn;
 
     int rc = zs.inflate(JZlib.Z_SYNC_FLUSH);
-    if (rc != JZlib.Z_OK) {
+    if (rc != JZlib.Z_OK && rc != JZlib.Z_STREAM_END) {
       throw new ErrorException("ZlibInStream: inflate failed");
     }
 

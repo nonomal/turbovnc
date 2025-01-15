@@ -5,7 +5,7 @@ if(NOT DEFINED CMAKE_JAVA_COMPILE_FLAGS AND DEFINED ENV{JAVAFLAGS})
 	set(DEFAULT_CMAKE_JAVA_COMPILE_FLAGS $ENV{JAVAFLAGS})
 else()
 	set(DEFAULT_CMAKE_JAVA_COMPILE_FLAGS
-		"-Xlint:all,-serial,-cast,-unchecked,-rawtypes")
+		"-Xlint:all,-serial,-unchecked,-rawtypes")
 endif()
 set(CMAKE_JAVA_COMPILE_FLAGS ${DEFAULT_CMAKE_JAVA_COMPILE_FLAGS} CACHE STRING
 	"Java compiler flags (Default: ${DEFAULT_CMAKE_JAVA_COMPILE_FLAGS})")
@@ -193,6 +193,7 @@ report_directory(JAVADIR)
 
 option(TVNC_INCLUDEJRE "Include a custom Java Runtime Environment (JRE) with the TurboVNC Viewer"
 	FALSE)
+boolean_number(TVNC_INCLUDEJRE)
 boolean_number(TVNC_INCLUDEJRE PARENT_SCOPE)
 report_option(TVNC_INCLUDEJRE "Custom JRE")
 

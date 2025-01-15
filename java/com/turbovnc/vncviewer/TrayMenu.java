@@ -1,6 +1,7 @@
-/* Copyright (C) 2002-2005 RealVNC Ltd.  All Rights Reserved.
+/* Copyright (C) 2014, 2018, 2020, 2022, 2024 D. R. Commander.
+ *                                            All Rights Reserved.
  * Copyright (C) 2011 Brian P. Hinz
- * Copyright (C) 2014, 2018, 2020 D. R. Commander.  All Rights Reserved.
+ * Copyright (C) 2002-2005 RealVNC Ltd.  All Rights Reserved.
  *
  * This is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -27,19 +28,19 @@ import java.lang.reflect.*;
 import com.turbovnc.rdr.*;
 import com.turbovnc.rfb.*;
 
-public class TrayMenu extends PopupMenu implements ActionListener {
+public final class TrayMenu extends PopupMenu implements ActionListener {
 
   public TrayMenu(VncViewer viewer_) {
     super("TurboVNC Viewer");
     viewer = viewer_;
 
-    if (!Params.noNewConn.getValue()) {
+    if (!viewer.getParams().noNewConn.get()) {
       newConn = addMenuItem("New connection...");
     }
     options = addMenuItem("Default options...");
     addSeparator();
     about = addMenuItem("About TurboVNC Viewer...");
-    if (!Params.noNewConn.getValue()) {
+    if (!viewer.getParams().noNewConn.get()) {
       addSeparator();
       exit = addMenuItem("Close listener");
     }
@@ -104,7 +105,7 @@ public class TrayMenu extends PopupMenu implements ActionListener {
   }
 
   public void actionPerformed(ActionEvent ev) {
-    if (!Params.noNewConn.getValue() && actionMatch(ev, newConn)) {
+    if (!viewer.getParams().noNewConn.get() && actionMatch(ev, newConn)) {
       VncViewer.newViewer(viewer);
     } else if (actionMatch(ev, options)) {
       viewer.showOptions();

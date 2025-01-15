@@ -4,27 +4,28 @@
  *
  */
 
-/*
- *  Copyright (C) 1999 AT&T Laboratories Cambridge.  All Rights Reserved.
- *  Copyright (C) 2009 TightVNC Team.  All Rights Reserved.
- *  Copyright (C) 2009 Red Hat, Inc.  All Rights Reserved.
- *  Copyright (C) 2013, 2018 Pierre Ossman for Cendio AB.  All Rights Reserved.
- *  Copyright (C) 2014-2016, 2019, 2021 D. R. Commander.  All Rights Reserved.
+/* Copyright (C) 2014-2016, 2019, 2021-2022, 2024 D. R. Commander.
+ *                                                All Rights Reserved.
+ * Copyright (C) 2013, 2017-2018 Pierre Ossman for Cendio AB.
+ *                               All Rights Reserved.
+ * Copyright (C) 2009 Red Hat, Inc.  All Rights Reserved.
+ * Copyright (C) 2009 TightVNC Team.  All Rights Reserved.
+ * Copyright (C) 1999 AT&T Laboratories Cambridge.  All Rights Reserved.
  *
- *  This is free software; you can redistribute it and/or modify
- *  it under the terms of the GNU General Public License as published by
- *  the Free Software Foundation; either version 2 of the License, or
- *  (at your option) any later version.
+ * This is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
  *
- *  This software is distributed in the hope that it will be useful,
- *  but WITHOUT ANY WARRANTY; without even the implied warranty of
- *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- *  GNU General Public License for more details.
+ * This software is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  *
- *  You should have received a copy of the GNU General Public License
- *  along with this software; if not, write to the Free Software
- *  Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301,
- *  USA.
+ * You should have received a copy of the GNU General Public License
+ * along with this software; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301,
+ * USA.
  */
 
 #ifdef HAVE_DIX_CONFIG_H
@@ -40,22 +41,21 @@
 #include <X11/keysym.h>
 #include "inputstr.h"
 #include "inpututils.h"
+#include "xkbsrv.h"
 #include "mi.h"
 #include "rfb.h"
 #include "input-xkb.h"
-
-Bool xkbDebug = FALSE;
+#include "qnum_to_xorgevdev.h"
+#include "qnum_to_xorgkbd.h"
 
 DeviceIntPtr kbdDevice = NULL;
 static DeviceIntPtr ptrDevice = NULL;
-
-/* If TRUE, then keys META == ALT as in the original AT&T version. */
-Bool compatibleKbd = FALSE;
 
 /* Avoid fake Shift presses for keys affected by NumLock */
 Bool avoidShiftNumLock = TRUE;
 Bool ignoreLockModifiers = TRUE;
 Bool fakeShift = TRUE;
+Bool enableQEMUExtKeyEvent = TRUE;
 
 unsigned char ptrAcceleration = 50;
 
@@ -64,16 +64,15 @@ unsigned char ptrAcceleration = 50;
 #define NoSymbol64 NoSymbol16 NoSymbol16 NoSymbol16 NoSymbol16
 KeySym pressedKeys[256] = { NoSymbol64 NoSymbol64 NoSymbol64 NoSymbol64 };
 
+static const unsigned short *codeMap;
+static unsigned int codeMapLen;
+
 
 void KbdDeviceInit(DeviceIntPtr pDevice)
 {
   char *env;
 
   kbdDevice = pDevice;
-  if ((env = getenv("TVNC_XKBDEBUG")) != NULL && !strcmp(env, "1")) {
-    rfbLog("XKEYBOARD handler debugging messages enabled\n");
-    xkbDebug = TRUE;
-  }
   if ((env = getenv("TVNC_XKBFAKESHIFT")) != NULL && !strcmp(env, "0")) {
     rfbLog("Disabling fake shift key event generation in XKEYBOARD handler\n");
     fakeShift = FALSE;
@@ -82,6 +81,26 @@ void KbdDeviceInit(DeviceIntPtr pDevice)
     rfbLog("Allowing Caps Lock and other lock modifiers in XKEYBOARD handler\n");
     ignoreLockModifiers = FALSE;
   }
+}
+
+
+void QEMUExtKeyboardEventInit(void)
+{
+  XkbRMLVOSet rmlvo;
+
+  XkbGetRulesDflts(&rmlvo);
+  if (!strcmp(rmlvo.rules, "evdev")) {
+    codeMap = code_map_qnum_to_xorgevdev;
+    codeMapLen = code_map_qnum_to_xorgevdev_len;
+  } else if (!strcmp(rmlvo.rules, "base") || !strcmp(rmlvo.rules, "xorg")) {
+    codeMap = code_map_qnum_to_xorgkbd;
+    codeMapLen = code_map_qnum_to_xorgkbd_len;
+  } else {
+    rfbLog("WARNING: QEMU Extended Key Event protocol extension\n");
+    rfbLog("  requires evdev or xorg XKB rules.  Disabling extension\n");
+    enableQEMUExtKeyEvent = FALSE;
+  }
+  XkbFreeRMLVOSet(&rmlvo, FALSE);
 }
 
 
@@ -103,8 +122,8 @@ static inline void PressKey(DeviceIntPtr dev, int kc, Bool down,
 {
   int action;
 
-  if (msg != NULL && xkbDebug)
-    rfbLog("PressKey: %s %d %s\n", msg, kc, down ? "down" : "up");
+  if (msg != NULL)
+    LogMessage(X_DEBUG, "PressKey: %s %d %s\n", msg, kc, down ? "down" : "up");
 
   action = down ? KeyPress : KeyRelease;
   QueueKeyboardEvents(dev, action, kc);
@@ -162,6 +181,38 @@ static struct altKeysym_t {
 
 
 /*
+ * ExtKeyEvent() - handle raw keycode from QEMU Extended Key Event extension
+ */
+
+void ExtKeyEvent(KeySym keysym, unsigned keycode, BOOL down)
+{
+  /* Simple case: the client has specified the keycode */
+  if (keycode && keycode < codeMapLen) {
+    keycode = codeMap[keycode];
+    if (!keycode) {
+      /* No code map entry found for the keycode.  Try to use the keysym
+         instead. */
+      if (keysym) KeyEvent(keysym, down);
+      return;
+    }
+
+    /* Update the pressed keys map in case we get a mix of events with and
+       without keycodes. */
+    if (down && keysym) pressedKeys[keycode] = keysym;
+    else pressedKeys[keycode] = NoSymbol;
+
+    PressKey(kbdDevice, keycode, down, "raw keycode");
+    mieqProcessInputEvents();
+    return;
+  }
+
+  /* The keycode is 0 (should never happen) or exceeds the code map length.
+     Try to use the keysym instead. */
+  if (keysym) KeyEvent(keysym, down);
+}
+
+
+/*
  * KeyEvent() - work out the best keycode corresponding to the keysym sent by
  * the viewer. This is basically impossible in the general case, but we make
  * a best effort by assuming that all useful keysyms can be reached using
@@ -200,8 +251,7 @@ void KeyEvent(CARD32 keysym, Bool down)
      * This can happen quite often as we ignore some
      * key presses.
      */
-    if (xkbDebug)
-      rfbLog("Unexpected release of keysym 0x%x\n", keysym);
+    LogMessage(X_DEBUG, "Unexpected release of keysym 0x%x\n", keysym);
 
     return;
   }
@@ -236,8 +286,7 @@ void KeyEvent(CARD32 keysym, Bool down)
     }
 
     if ((meta != 0) && (alt == meta)) {
-      if (xkbDebug)
-        rfbLog("Replacing Shift+Alt with Shift+Meta\n");
+      LogMessage(X_DEBUG, "Replacing Shift+Alt with Shift+Meta\n");
       keycode = meta;
       new_state = state;
     }
@@ -263,8 +312,7 @@ void KeyEvent(CARD32 keysym, Bool down)
 
   /* We don't have lock synchronisation... */
   if (IsLockModifier(keycode, new_state) && ignoreLockModifiers) {
-    if (xkbDebug)
-      rfbLog("Ignoring lock key (e.g. caps lock)\n");
+    LogMessage(X_DEBUG, "Ignoring lock key (e.g. caps lock)\n");
     return;
   }
 
@@ -307,9 +355,8 @@ void KeyEvent(CARD32 keysym, Bool down)
     KeyCode keycode2 = 0;
     unsigned new_state2;
 
-    if (xkbDebug)
-      rfbLog("Finding alternative to keysym 0x%x to avoid fake shift for numpad\n",
-             keysym);
+    LogMessage(X_DEBUG, "Finding alternative to keysym 0x%x to avoid fake shift for numpad\n",
+               keysym);
 
     for (i = 0; i < sizeof(altKeysym) / sizeof(altKeysym[0]); i++) {
       KeySym altsym;
@@ -333,8 +380,7 @@ void KeyEvent(CARD32 keysym, Bool down)
     }
 
     if (i == sizeof(altKeysym) / sizeof(altKeysym[0])) {
-      if (xkbDebug)
-        rfbLog("No alternative keysym found\n");
+      LogMessage(X_DEBUG, "No alternative keysym found\n");
     } else {
       keycode = keycode2;
       new_state = new_state2;
@@ -460,7 +506,7 @@ void KeyEvent(CARD32 keysym, Bool down)
 static int cursorPosX = -1, cursorPosY = -1;
 
 
-void PtrAddEvent(int buttonMask, int x, int y, rfbClientPtr cl)
+void PtrAddEvent(int buttonMask, int x, int y)
 {
   int i;
   int valuators[2];
@@ -480,7 +526,7 @@ void PtrAddEvent(int buttonMask, int x, int y, rfbClientPtr cl)
     cursorPosY = y;
   }
 
-  for (i = 0; i < 5; i++) {
+  for (i = 0; i < 7; i++) {
     if ((buttonMask ^ oldButtonMask) & (1 << i)) {
       if (buttonMask & (1 << i)) {
         valuator_mask_set_range(&mask, 0, 0, NULL);
@@ -499,13 +545,13 @@ void PtrAddEvent(int buttonMask, int x, int y, rfbClientPtr cl)
 }
 
 
-char *stristr(const char *s1, const char *s2)
+Bool stristr(const char *s1, const char *s2)
 {
   char *str1, *str2, *ret;
   int i;
 
   if (!s1 || !s2 || strlen(s1) < 1 || strlen(s2) < 1)
-    return NULL;
+    return FALSE;
 
   str1 = strdup(s1);
   for (i = 0; i < strlen(str1); i++)
@@ -516,7 +562,7 @@ char *stristr(const char *s1, const char *s2)
 
   ret = strstr(str1, str2);
   free(str1);  free(str2);
-  return ret;
+  return ret != NULL;
 }
 
 

@@ -4,27 +4,28 @@
  * Modified for XFree86 4.x by Alan Hourihane <alanh@fairlite.demon.co.uk>
  */
 
-/*
- *  Copyright (C) 2009-2022 D. R. Commander.  All Rights Reserved.
- *  Copyright (C) 2010 University Corporation for Atmospheric Research.
- *                     All Rights Reserved.
- *  Copyright (C) 2005 Sun Microsystems, Inc.  All Rights Reserved.
- *  Copyright (C) 1999 AT&T Laboratories Cambridge.  All Rights Reserved.
+/* Copyright (C) 2009-2024 D. R. Commander.  All Rights Reserved.
+ * Copyright (C) 2021 Steffen Kieß
+ * Copyright (C) 2016-2017 Pierre Ossman for Cendio AB.  All Rights Reserved.
+ * Copyright (C) 2010 University Corporation for Atmospheric Research.
+ *                    All Rights Reserved.
+ * Copyright (C) 2005 Sun Microsystems, Inc.  All Rights Reserved.
+ * Copyright (C) 1999 AT&T Laboratories Cambridge.  All Rights Reserved.
  *
- *  This is free software; you can redistribute it and/or modify
- *  it under the terms of the GNU General Public License as published by
- *  the Free Software Foundation; either version 2 of the License, or
- *  (at your option) any later version.
+ * This is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
  *
- *  This software is distributed in the hope that it will be useful,
- *  but WITHOUT ANY WARRANTY; without even the implied warranty of
- *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- *  GNU General Public License for more details.
+ * This software is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  *
- *  You should have received a copy of the GNU General Public License
- *  along with this software; if not, write to the Free Software
- *  Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301,
- *  USA.
+ * You should have received a copy of the GNU General Public License
+ * along with this software; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301,
+ * USA.
  */
 
 /*
@@ -64,6 +65,10 @@ from the X Consortium.
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <errno.h>
+#ifdef DDXOSVERRORF
+#include <syslog.h>
+#endif
 #include <unistd.h>
 #include <sys/types.h>
 #include <netdb.h>
@@ -103,7 +108,7 @@ from the X Consortium.
 #ifdef GLXEXT
 extern char *dri_driver_path;
 #endif
-#ifdef X_REGISTRY_REQUEST
+#if defined(X_REGISTRY_REQUEST) && !defined(TURBOVNC_STATIC_XORG_PATHS)
 extern char registry_path[PATH_MAX];
 #endif
 
@@ -114,6 +119,10 @@ static Bool initOutputCalled = FALSE;
 static Bool noCursor = FALSE;
 char *desktopName = DEFAULT_DESKTOP_NAME;
 int traceLevel = 0;
+int rfbLEDState = (int)rfbLEDUnknown;
+#ifdef DDXOSVERRORF
+static Bool sysLog = FALSE;
+#endif
 
 char rfbThisHost[256];
 
@@ -172,12 +181,7 @@ static void PrintVersion(void)
 }
 
 
-/*
- * ddxProcessArgument is our first entry point and will be called at the
- * very start for each argument.  It is not called again on server reset.
- */
-
-int ddxProcessArgument(int argc, char *argv[], int i)
+static void InitRFB(void)
 {
   static Bool firstTime = TRUE;
 
@@ -197,6 +201,17 @@ int ddxProcessArgument(int argc, char *argv[], int i)
     interface6 = in6addr_any;
     firstTime = FALSE;
   }
+}
+
+
+/*
+ * ddxProcessArgument is our first entry point and will be called at the
+ * very start for each argument.  It is not called again on server reset.
+ */
+
+int ddxProcessArgument(int argc, char *argv[], int i)
+{
+  InitRFB();
 
   /***** TurboVNC connection options *****/
 
@@ -214,13 +229,17 @@ int ddxProcessArgument(int argc, char *argv[], int i)
 
   if (strcasecmp(argv[i], "-capture") == 0) {
     REQUIRE_ARG();
-    captureFile = strdup(argv[i + 1]);
+    rfbCaptureFile = strdup(argv[i + 1]);
     return 2;
   }
 
   if (strcasecmp(argv[i], "-deferupdate") == 0) {  /* -deferupdate ms */
     REQUIRE_ARG();
     rfbDeferUpdateTime = atoi(argv[i + 1]);
+    if (rfbDeferUpdateTime < 0) {
+      UseMsg();
+      exit(1);
+    }
     return 2;
   }
 
@@ -247,7 +266,8 @@ int ddxProcessArgument(int argc, char *argv[], int i)
   }
 
   if (strcasecmp(argv[i], "-inetd") == 0) {  /* -inetd */
-    int n;
+    int n, nullFD;
+
     for (n = 1; n < 100; n++) {
       if (CheckDisplayNumber(n))
         break;
@@ -256,17 +276,29 @@ int ddxProcessArgument(int argc, char *argv[], int i)
     if (n >= 100)
       FatalError("-inetd: couldn't find free display number");
 
-    sprintf(inetdDisplayNumStr, "%d", n);
+    snprintf(inetdDisplayNumStr, 10, "%d", n);
     display = inetdDisplayNumStr;
 
-    /* fds 0, 1 and 2 (stdin, out and err) are all the same socket to the
-       RFB client.  OsInit() closes stdout and stdin, and we don't want
-       stderr to go to the RFB client, so make the client socket 3 and
-       close stderr.  OsInit() will redirect stderr logging to an
-       appropriate log file or /dev/null if that doesn't work. */
-    dup2(0, 3);
-    inetdSock = 3;
-    close(2);
+    /* FDs 0, 1, and 2 (stdin, stdout, and stderr) are all redirected to the
+       same socket, which is connected to the RFB client.  OsInit() closes
+       stdin and stdout, so we obtain a new file descriptor for the socket by
+       duplicating stdin. */
+    if ((inetdSock = dup(0)) == -1)
+      FatalError("-inetd: couldn't allocate a new file descriptor: %s",
+                 strerror(errno));
+
+    /* We don't want stderr to be redirected to the RFB client, since stderr is
+       used for logging.  (NOTE: The -syslog option redirects most of the
+       logging to the system log, but it isn't foolproof.)  We explicitly
+       redirect stderr (FD 2) to /dev/null rather than simply closing it.
+       Otherwise, OsInit() (more specifically ospoll_create()) will obtain the
+       first free file descriptor (2) to use for polling, then it will check
+       whether FD 2 (which it assumes is still stderr) is writable.  Since
+       polling file descriptors aren't writable, OsInit() will redirect FD 2 to
+       /dev/null, thus breaking the polling subsystem. */
+    nullFD = open("/dev/null", O_WRONLY);
+    dup2(nullFD, 2);
+    close(nullFD);
 
     return 1;
   }
@@ -309,6 +341,10 @@ int ddxProcessArgument(int argc, char *argv[], int i)
   if (strcasecmp(argv[i], "-maxclipboard") == 0) {
     REQUIRE_ARG();
     rfbMaxClipboard = atoi(argv[i + 1]);
+    if (rfbMaxClipboard < 0) {
+      UseMsg();
+      exit(1);
+    }
     return 2;
   }
 
@@ -338,11 +374,6 @@ int ddxProcessArgument(int argc, char *argv[], int i)
     return 1;
   }
 
-  if (strcasecmp(argv[i], "-nocutbuffersync") == 0) {
-    rfbSyncCutBuffer = FALSE;
-    return 1;
-  }
-
   if (strcasecmp(argv[i], "-noflowcontrol") == 0) {
     rfbCongestionControl = FALSE;
     return 1;
@@ -361,25 +392,59 @@ int ddxProcessArgument(int argc, char *argv[], int i)
   if (strcasecmp(argv[i], "-rfbport") == 0) {  /* -rfbport port */
     REQUIRE_ARG();
     rfbPort = atoi(argv[i + 1]);
+    if (rfbPort < 0) {
+      UseMsg();
+      exit(1);
+    }
+    return 2;
+  }
+
+  if (strcasecmp(argv[i], "-rfbunixpath") == 0) {  /* -rfbunixpath path */
+    REQUIRE_ARG();
+    rfbUDSPath = argv[i + 1];
+    return 2;
+  }
+
+  if (strcasecmp(argv[i], "-rfbunixmode") == 0) {  /* -rfbunixmode mode */
+    char *ptr;
+    REQUIRE_ARG();
+    ptr = argv[i + 1];
+    rfbUDSMode = strtol(argv[i + 1], &ptr, 8);
+    if (*argv[i + 1] == 0 || *ptr != 0 || rfbUDSMode < 0 || rfbUDSMode > 0777)
+      FatalError("Invalid mode %s\n", argv[i + 1]);
     return 2;
   }
 
   if (strcasecmp(argv[i], "-rfbwait") == 0) {  /* -rfbwait ms */
     REQUIRE_ARG();
     rfbMaxClientWait = atoi(argv[i + 1]);
+    if (rfbMaxClientWait < 0) {
+      UseMsg();
+      exit(1);
+    }
     return 2;
   }
 
   /***** TurboVNC input options *****/
 
-  if (strcasecmp(argv[i], "-compatiblekbd") == 0) {
-    compatibleKbd = TRUE;
-    return 1;
-  }
-
   if (strcasecmp(argv[i], "-nocursor") == 0) {
     noCursor = TRUE;
     return 1;
+  }
+
+  if (strcasecmp(argv[i], "-noserverkeymap") == 0) {
+    enableQEMUExtKeyEvent = FALSE;
+    return 1;
+  }
+
+  if (strcasecmp(argv[i], "-pointerlocktimeout") == 0) {
+    REQUIRE_ARG();
+    rfbPointerLockTimeout = atoi(argv[i + 1]);
+    if (rfbPointerLockTimeout < 0) {
+      UseMsg();
+      exit(1);
+    }
+    return 2;
   }
 
   /* Run server in view-only mode - Ehud Karni SW */
@@ -437,6 +502,7 @@ int ddxProcessArgument(int argc, char *argv[], int i)
     return 2;
   }
 
+#ifndef TURBOVNC_STATIC_XORG_PATHS
   if (strcasecmp(argv[i], "-dridir") == 0) {
 #ifdef GLXEXT
     REQUIRE_ARG();
@@ -444,6 +510,7 @@ int ddxProcessArgument(int argc, char *argv[], int i)
 #endif
     return 2;
   }
+#endif
 
   if (strcasecmp(argv[i], "-geometry") == 0) {
     /* -geometry WxH or W0xH0+X0+Y0[,W1xH1+X1+Y1,...] */
@@ -644,6 +711,12 @@ int ddxProcessArgument(int argc, char *argv[], int i)
 
   /***** TurboVNC miscellaneous options *****/
 
+  if (strcasecmp(argv[i], "-giidebug") == 0) {
+    rfbGIIDebug = TRUE;
+    return 1;
+  }
+
+#ifndef TURBOVNC_STATIC_XORG_PATHS
   if (strcasecmp(argv[i], "-registrydir") == 0) {
 #ifdef X_REGISTRY_REQUEST
     REQUIRE_ARG();
@@ -651,6 +724,14 @@ int ddxProcessArgument(int argc, char *argv[], int i)
 #endif
     return 2;
   }
+#endif
+
+#ifdef DDXOSVERRORF
+  if (strcasecmp(argv[i], "-syslog") == 0) {
+    sysLog = TRUE;
+    return 1;
+  }
+#endif
 
   if (strcasecmp(argv[i], "-verbose") == 0) {
     LogSetParameter(XLOG_VERBOSITY, X_DEBUG);
@@ -694,6 +775,16 @@ static int numFormats = 7;
 #else
 static int numFormats = 6;
 #endif
+
+
+static void rfbBlockHandler(void *blockData, void *timeout)
+{
+  IdleTimerCheck();
+}
+
+static void rfbWakeupHandler(void *blockData, int result)
+{
+}
 
 
 void InitOutput(ScreenInfo *pScreenInfo, int argc, char **argv)
@@ -755,6 +846,8 @@ void InitOutput(ScreenInfo *pScreenInfo, int argc, char **argv)
 
   if (AddScreen(rfbScreenInit, argc, argv) == -1)
     FatalError("Couldn't add screen");
+
+  RegisterBlockAndWakeupHandlers(rfbBlockHandler, rfbWakeupHandler, 0);
 }
 
 
@@ -1064,6 +1157,7 @@ rfbDevInfo virtualTabletPad =
 void InitInput(int argc, char *argv[])
 {
   DeviceIntPtr p, k;
+  static Bool inetdInitDone = FALSE;
 
   if (AllocDevicePair(serverClient, "TurboVNC", &p, &k, rfbMouseProc,
                       rfbKeybdProc, FALSE) != Success)
@@ -1088,6 +1182,11 @@ void InitInput(int argc, char *argv[])
       FatalError("Could not create TurboVNC virtual tablet eraser device");
     if (!AddExtInputDevice(&virtualTabletPad))
       FatalError("Could not create TurboVNC virtual tablet pad device");
+  }
+
+  if (!inetdInitDone && inetdSock != -1) {
+    rfbNewClientConnection(inetdSock);
+    inetdInitDone = TRUE;
   }
 }
 
@@ -1255,6 +1354,43 @@ void CloseInput(void)
 }
 
 
+static void rfbKeyboardBell(int volume, DeviceIntPtr pDev, void *ctrl,
+                            int feedbackClass)
+{
+  if (volume > 0)
+    rfbSendBell();
+}
+
+static void rfbKeyboardCtrl(DeviceIntPtr device, KeybdCtrl *ctrl)
+{
+  rfbClientPtr cl, nextCl;
+  int state = 0;
+
+  if (ctrl->leds & (1 << 0))
+    state |= rfbLEDCapsLock;
+  if (ctrl->leds & (1 << 1))
+    state |= rfbLEDNumLock;
+  if (ctrl->leds & (1 << 2))
+    state |= rfbLEDScrollLock;
+
+  if (state == rfbLEDState)
+    return;
+
+  rfbLEDState = state;
+
+  for (cl = rfbClientHead; cl; cl = nextCl) {
+    nextCl = cl->next;
+
+    if (cl->state != RFB_NORMAL || !SUPPORTS_LED_STATE(cl))
+      continue;
+
+    cl->ledState = rfbLEDState;
+    cl->pendingLEDState = TRUE;
+
+    rfbSendFramebufferUpdate(cl);
+  }
+}
+
 static int rfbKeybdProc(DeviceIntPtr pDevice, int onoff)
 {
   DevicePtr pDev = (DevicePtr)pDevice;
@@ -1262,8 +1398,9 @@ static int rfbKeybdProc(DeviceIntPtr pDevice, int onoff)
   switch (onoff) {
     case DEVICE_INIT:
       KbdDeviceInit(pDevice);
-      InitKeyboardDeviceStruct(pDevice, &rmlvo, (BellProcPtr)rfbSendBell,
-                               (KbdCtrlProcPtr)NoopDDA);
+      InitKeyboardDeviceStruct(pDevice, &rmlvo, rfbKeyboardBell,
+                               rfbKeyboardCtrl);
+      QEMUExtKeyboardEventInit();
       break;
     case DEVICE_ON:
       pDev->on = TRUE;
@@ -1348,14 +1485,7 @@ Bool LegalModifier(unsigned int key, DeviceIntPtr pDev)
 
 void ProcessInputEvents(void)
 {
-  static Bool inetdInitDone = FALSE;
-
-  if (!inetdInitDone && inetdSock != -1) {
-    rfbNewClientConnection(inetdSock);
-    inetdInitDone = TRUE;
-  }
   mieqProcessInputEvents();
-  IdleTimerCheck();
 }
 
 
@@ -1403,17 +1533,6 @@ static Bool CheckDisplayNumber(int n)
 
 void rfbRootPropertyChange(PropertyPtr pProp)
 {
-  if ((pProp->propertyName == XA_CUT_BUFFER0) && (pProp->type == XA_STRING) &&
-      (pProp->format == 8) && rfbSyncCutBuffer) {
-    char *str;
-    str = (char *)rfbAlloc(pProp->size + 1);
-    strncpy(str, pProp->data, pProp->size);
-    str[pProp->size] = 0;
-    rfbGotXCutText(str, pProp->size);
-    free(str);
-    return;
-  }
-
   if (!rfbAuthDisableRevCon && (pProp->propertyName == VNC_CONNECT) &&
       (pProp->type == XA_STRING) && (pProp->format == 8)) {
     char *colonPos;
@@ -1512,7 +1631,7 @@ char *rfbAllocateFramebufferMemory(rfbFBInfoPtr prfb)
 
   prfb->sizeInBytes = (prfb->paddedWidthInBytes * prfb->height);
 
-  prfb->pfbMemory = (char *)malloc(prfb->sizeInBytes);
+  prfb->pfbMemory = rfbAlloc0(prfb->sizeInBytes);
 
   return prfb->pfbMemory;
 }
@@ -1545,12 +1664,16 @@ void ddxGiveUp(enum ExitCode error)
     rfbPAMEnd(cl);
 #endif
   ShutdownTightThreads();
+  TimerFree(pointerLockTimer);
+  rfbRemoveScreens(&rfbScreens);
   free(rfbFB.pfbMemory);
   if (initOutputCalled) {
     char unixSocketName[32];
     sprintf(unixSocketName, "/tmp/.X11-unix/X%s", display);
     unlink(unixSocketName);
   }
+  if (rfbUDSPath && rfbUDSCreated)
+    unlink(rfbUDSPath);
 }
 
 
@@ -1567,8 +1690,18 @@ void DDXRingBell(int percent, int pitch, int duration)
 }
 
 
+#ifdef DDXOSVERRORF
+static void OsVendorVErrorF(const char *f, va_list args)
+{
+  if (sysLog)
+    vsyslog(LOG_ERR, f, args);
+}
+#endif
+
+
 void OsVendorInit(void)
 {
+  InitRFB();
   PrintVersion();
   rfbAuthInit();
   if (rfbAuthDisableX11TCP) {
@@ -1600,11 +1733,21 @@ void OsVendorInit(void)
     rfbAuthPAMSession = FALSE;
   }
 #endif
+#ifdef DDXOSVERRORF
+  if (!OsVendorVErrorFProc && sysLog)
+    OsVendorVErrorFProc = OsVendorVErrorF;
+#endif
 }
 
 
 void OsVendorFatalError(const char *f, va_list args)
 {
+#ifdef DDXOSVERRORF
+  if (sysLog) {
+    syslog(LOG_ERR, "Fatal server error:");
+    vsyslog(LOG_ERR, f, args);
+  }
+#endif
 }
 
 
@@ -1636,23 +1779,31 @@ void ddxUseMsg(void)
   ErrorF("-nevershared           never treat new connections as shared\n");
   ErrorF("-noclipboardrecv       disable client->server clipboard synchronization\n");
   ErrorF("-noclipboardsend       disable server->client clipboard synchronization\n");
-  ErrorF("-nocutbuffersync       disable clipboard synchronization for applications\n");
-  ErrorF("                       that use the (obsolete) X cut buffer\n");
   ErrorF("-noflowcontrol         when continuous updates are enabled, send updates\n");
   ErrorF("                       whether or not the viewer is ready to receive them\n");
   ErrorF("-noprimarysync         disable clipboard synchronization with the PRIMARY\n");
   ErrorF("                       selection (typically used when pasting with the middle\n");
   ErrorF("                       mouse button)\n");
   ErrorF("-noreverse             disable reverse connections\n");
-  ErrorF("-rfbport port          TCP port for RFB protocol\n");
+  ErrorF("-rfbport port          TCP port for RFB connections\n");
+  ErrorF("-rfbunixpath path      path to Unix domain socket for RFB connections\n");
+  ErrorF("-rfbunixmode mode      Unix domain socket permissions\n");
   ErrorF("-rfbwait time          max time in ms to wait for a send/receive operation\n");
   ErrorF("                       to/from a connected viewer to complete [default: %d]\n",
          DEFAULT_MAX_CLIENT_WAIT);
 
   ErrorF("\nTurboVNC input options\n");
   ErrorF("======================\n");
-  ErrorF("-compatiblekbd         set META key = ALT key as in the original VNC\n");
   ErrorF("-nocursor              don't display a cursor\n");
+  ErrorF("-noserverkeymap        disable QEMU Extended Key Event, QEMU LED State, and\n");
+  ErrorF("                       VMware LED State RFB extensions, which cause keycode to\n");
+  ErrorF("                       keysym mapping to be performed on the host\n");
+  ErrorF("-pointerlocktimeout time\n");
+  ErrorF("                       max time in ms (0 = indefinitely) to wait for a new\n");
+  ErrorF("                       pointer event from a connected viewer that is dragging\n");
+  ErrorF("                       the mouse (and thus has exclusive control over the\n");
+  ErrorF("                       pointer) [default: %d]\n",
+         DEFAULT_POINTER_LOCK_TIMEOUT);
   ErrorF("-viewonly              only let viewers view, not control, the remote desktop\n");
   ErrorF("-virtualtablet         set up virtual stylus and eraser devices for this\n");
   ErrorF("                       session, to emulate a Wacom tablet, and map all\n");
@@ -1672,12 +1823,14 @@ void ddxUseMsg(void)
   ErrorF("\nTurboVNC display options\n");
   ErrorF("========================\n");
   ErrorF("-depth D               set framebuffer depth\n");
+#ifndef TURBOVNC_STATIC_XORG_PATHS
   ErrorF("-dridir dir            specify directory containing the swrast Mesa driver\n");
+#endif
   ErrorF("-geometry WxH          set framebuffer width & height (single-screen)\n");
   ErrorF("-geometry W0xH0+X0+Y0[,W1xH1+X1+Y1,...,WnxHn+Xn+Yn]\n");
   ErrorF("                       set multi-screen geometry (see man page)\n");
 #ifdef NVCONTROL
-  ErrorF("-nvcontrol display     set up a virtual NV-CONTROL extension and redirect\n");
+  ErrorF("-nvcontrol display     create a fake NV-CONTROL extension and redirect\n");
   ErrorF("                       NV-CONTROL requests to the specified X display\n");
 #endif
   ErrorF("-pixelformat format    set pixel format (BGRnnn or RGBnnn)\n");
@@ -1730,14 +1883,20 @@ void ddxUseMsg(void)
 
   ErrorF("\nTurboVNC miscellaneous options\n");
   ErrorF("==============================\n");
+#ifndef TURBOVNC_STATIC_XORG_PATHS
   ErrorF("-registrydir dir       specify directory containing protocol.txt\n");
+#endif
+#ifdef DDXOSVERRORF
+  ErrorF("-syslog                redirect all errors/warnings/messages to the system log\n");
+#endif
   ErrorF("-verbose               print all X.org errors, warnings, and messages\n");
   ErrorF("-version               report Xvnc version on stderr\n\n");
 }
 
 
 /*
- * rfbLog prints a time-stamped message to the log file (stderr.)
+ * rfbLog prints a time-stamped message to the log file (stderr or the system
+ * log.)
  */
 
 void rfbLog(char *format, ...)
@@ -1749,14 +1908,22 @@ void rfbLog(char *format, ...)
 
   va_start(args, format);
 
-  time(&clock);
-  strftime(buf, 255, "%d/%m/%Y %H:%M:%S ", localtime(&clock));
-  for (i = 0; i < traceLevel; i++)
-    snprintf(&buf[strlen(buf)], 256 - strlen(buf), "  ");
-  fputs(buf, stderr);
+#ifdef DDXOSVERRORF
+  if (sysLog)
+    /* NOTE: System log entries already have a timestamp. */
+    vsyslog(LOG_INFO, format, args);
+  else
+#endif
+  {
+    time(&clock);
+    strftime(buf, 255, "%d/%m/%Y %H:%M:%S ", localtime(&clock));
+    for (i = 0; i < traceLevel; i++)
+      snprintf(&buf[strlen(buf)], 256 - strlen(buf), "  ");
+    fputs(buf, stderr);
 
-  vfprintf(stderr, format, args);
-  fflush(stderr);
+    vfprintf(stderr, format, args);
+    fflush(stderr);
+  }
 
   va_end(args);
 }
@@ -1764,8 +1931,18 @@ void rfbLog(char *format, ...)
 
 void rfbLogPerror(char *str)
 {
-  rfbLog("");
-  perror(str);
+#ifdef DDXOSVERRORF
+  if (sysLog) {
+    if (str && strlen(str) > 0)
+      syslog(LOG_ERR, "%s: %s\n", str, strerror(errno));
+    else
+      syslog(LOG_ERR, "%s\n", strerror(errno));
+  } else
+#endif
+  {
+    rfbLog("");
+    perror(str);
+  }
 }
 
 

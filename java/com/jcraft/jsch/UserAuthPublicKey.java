@@ -3,6 +3,7 @@
 Copyright (c) 2002-2018 ymnk, JCraft,Inc. All rights reserved.
 Copyright (c) 2020 Jeremy Norris. All rights reserved.
 Copyright (c) 2020-2021 Matthias Wiedemann. All rights reserved.
+Copyright (c) 2023-2024 D. R. Commander. All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
 modification, are permitted provided that the following conditions are met:
@@ -10,8 +11,8 @@ modification, are permitted provided that the following conditions are met:
   1. Redistributions of source code must retain the above copyright notice,
      this list of conditions and the following disclaimer.
 
-  2. Redistributions in binary form must reproduce the above copyright 
-     notice, this list of conditions and the following disclaimer in 
+  2. Redistributions in binary form must reproduce the above copyright
+     notice, this list of conditions and the following disclaimer in
      the documentation and/or other materials provided with the distribution.
 
   3. The names of the authors may not be used to endorse or promote products
@@ -55,21 +56,20 @@ class UserAuthPublicKey extends UserAuth{
         return false;
       }
 
-      String rsamethods=null;
+      String rsamethod=null;
       String nonrsamethods=null;
       for(int i=0; i<pkmethoda.length; i++){
         if(pkmethoda[i].equals("ssh-rsa") || pkmethoda[i].equals("rsa-sha2-256") || pkmethoda[i].equals("rsa-sha2-512")){
-          if(rsamethods==null) rsamethods=pkmethoda[i];
-          else rsamethods+=","+pkmethoda[i];
+          if(session.supportedRSAMethods.contains(pkmethoda[i]) &&
+             rsamethod==null)
+            rsamethod=pkmethoda[i];
         }
         else{
           if(nonrsamethods==null) nonrsamethods=pkmethoda[i];
           else nonrsamethods+=","+pkmethoda[i];
         }
       }
-      String[] rsamethoda=Util.split(rsamethods, ",");
       String[] nonrsamethoda=Util.split(nonrsamethods, ",");
-
       _username=Util.str2byte(username);
 
       iloop:
@@ -81,14 +81,21 @@ class UserAuthPublicKey extends UserAuth{
 
         Identity identity=(Identity)(identities.elementAt(i));
 
+        if(JSch.getLogger().isEnabled(Logger.DEBUG)){
+          JSch.getLogger().log(Logger.DEBUG,
+                               "Trying private key: " + identity.getName() +
+                               (identity.isEncrypted() ? " (ENCRYPTED)" :
+                                " (decrypted)"));
+        }
+
         //System.err.println("UserAuthPublicKey: identity.isEncrypted()="+identity.isEncrypted());
         decryptKey(session, identity);
         //System.err.println("UserAuthPublicKey: identity.isEncrypted()="+identity.isEncrypted());
 
         String ipkmethod=identity.getAlgName();
         String[] ipkmethoda=null;
-        if(ipkmethod.equals("ssh-rsa")){
-          ipkmethoda=rsamethoda;
+        if(ipkmethod.equals("ssh-rsa") && rsamethod!=null){
+          ipkmethoda=new String[]{rsamethod};
         }
         else if(nonrsamethoda!=null && nonrsamethoda.length>0){
           for(int j=0; j<nonrsamethoda.length; j++){
@@ -256,8 +263,8 @@ class UserAuthPublicKey extends UserAuth{
               buf.getInt(); buf.getByte(); buf.getByte();
               byte[] foo=buf.getString();
               int partial_success=buf.getByte();
-            //System.err.println(new String(foo)+
-            //                   " partial_success:"+(partial_success!=0));
+              //System.err.println(new String(foo)+
+              //                   " partial_success:"+(partial_success!=0));
               if(partial_success!=0){
                 throw new JSchPartialAuthException(Util.byte2str(foo));
               }

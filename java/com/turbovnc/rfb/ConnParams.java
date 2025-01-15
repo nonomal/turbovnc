@@ -1,6 +1,8 @@
-/* Copyright (C) 2002-2005 RealVNC Ltd.  All Rights Reserved.
- * Copyright (C) 2011-2012, 2015, 2018 D. R. Commander.  All Rights Reserved.
+/* Copyright (C) 2011-2012, 2015, 2018, 2022, 2024 D. R. Commander.
+ *                                                 All Rights Reserved.
+ * Copyright 2019 Pierre Ossman for Cendio AB
  * Copyright (C) 2012 Brian P. Hinz
+ * Copyright (C) 2002-2005 RealVNC Ltd.  All Rights Reserved.
  *
  * This is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -22,7 +24,7 @@ package com.turbovnc.rfb;
 
 import com.turbovnc.rdr.*;
 
-public class ConnParams {
+public final class ConnParams {
 
   static LogWriter vlog = new LogWriter("ConnParams");
 
@@ -110,15 +112,43 @@ public class ConnParams {
 
   boolean done;
 
+  public int clipboardFlags() { return clipFlags; }
+
+  public int clipboardSize(int format)
+  {
+    for (int i = 0; i < 16; i++) {
+      if ((1 << i) == format)
+        return clipSizes[i];
+    }
+
+    throw new ErrorException("Invalid clipboard format 0x" +
+                             Integer.toHexString(format));
+  }
+
+  public void setClipboardCaps(int flags, int[] lengths)
+  {
+    int i, num;
+
+    clipFlags = flags;
+
+    num = 0;
+    for (i = 0; i < 16; i++) {
+      if ((flags & (1 << i)) == 0)
+        continue;
+      clipSizes[i] = lengths[num++];
+    }
+  }
+
   // CHECKSTYLE VisibilityModifier:OFF
   public boolean supportsDesktopResize;
   public boolean supportsExtendedDesktopSize;
   public boolean supportsDesktopRename;
-  public boolean supportsClientRedirect;
   public boolean supportsFence;
   public boolean supportsContinuousUpdates;
   public boolean supportsLastRect;
   public boolean supportsGII;
+  public boolean supportsQEMUExtKeyEvent;
+  public int ledState = RFB.LED_UNKNOWN;
 
   public boolean supportsSetDesktopSize;
   // CHECKSTYLE VisibilityModifier:ON
@@ -129,4 +159,6 @@ public class ConnParams {
   private int[] encodings;
   private StringBuilder verStr;
   private int verStrPos;
+  private int clipFlags;
+  private int[] clipSizes = new int[16];
 }

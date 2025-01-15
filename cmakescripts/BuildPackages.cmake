@@ -23,8 +23,7 @@ set(PKGID "com.virtualgl.${PKGNAME_LC}" CACHE STRING
 # Linux RPM and DEB
 ###############################################################################
 
-if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND
-	(TVNC_BUILDHELPER OR TVNC_BUILDSERVER))
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
 
 set(RPMARCH ${CMAKE_SYSTEM_PROCESSOR})
 if(CPU_TYPE STREQUAL "x86_64")
@@ -56,7 +55,7 @@ if(TVNC_BUILDSERVER)
 	if(TVNC_USEPAM)
 		set(DEBDEPENDS "libpam0g, ${DEBDEPENDS}")
 	endif()
-	set(DEBDEPENDS "${DEBDEPENDS}, xauth, x11-xkb-utils, xkb-data")
+	set(DEBDEPENDS "${DEBDEPENDS}, dbus-x11, xauth, x11-xkb-utils, xkb-data")
 	if(TVNC_BUILDWEBSERVER)
 		if(PYTHON_VERSION VERSION_GREATER 3.0 OR PYTHON_VERSION VERSION_EQUAL 3.0)
 			set(DEBDEPENDS "${DEBDEPENDS}, python3")
@@ -64,6 +63,17 @@ if(TVNC_BUILDSERVER)
 			set(DEBDEPENDS "${DEBDEPENDS}, python (>= 2.6)")
 		endif()
 	endif()
+	if(TVNC_SYSTEMX11)
+		set(DEBDEPENDS "${DEBDEPENDS}, libxfont2, libpixman-1-0")
+		if(TVNC_GLX)
+			set(DEBDEPENDS "${DEBDEPENDS}, libgl1")
+		endif()
+	elseif(TVNC_SYSTEMLIBS)
+		set(DEBDEPENDS "${DEBDEPENDS}, libfreetype6")
+	endif()
+endif()
+if(TVNC_BUILDVIEWER)
+	set(DEBDEPENDS "${DEBDEPENDS}, libxi6")
 endif()
 
 configure_file(release/makerpm.in pkgscripts/makerpm)
@@ -100,11 +110,7 @@ else()
 	set(INST_NAME ${CMAKE_PROJECT_NAME}-${VERSION}-x86)
 endif()
 
-set(INST_DEPENDS java)
-if(TVNC_BUILDHELPER)
-	set(INST_DEFS ${INST_DEFS} "-DTURBOVNCHELPER")
-	set(INST_DEPENDS ${INST_DEPENDS} turbovnchelper)
-endif()
+set(INST_DEPENDS java turbovnchelper)
 if(TVNC_INCLUDEJRE)
 	set(INST_DEFS ${INST_DEFS} "-DINCLUDEJRE")
 	set(INST_DEPENDS ${INST_DEPENDS} jrebuild)
@@ -132,7 +138,7 @@ endif() # WIN32
 # Mac DMG
 ###############################################################################
 
-if(APPLE AND TVNC_BUILDVIEWER AND TVNC_BUILDHELPER)
+if(APPLE AND TVNC_BUILDVIEWER)
 
 set(MACOS_APP_CERT_NAME "" CACHE STRING
 	"Name of the Developer ID Application certificate (in the macOS keychain) that should be used to sign the TurboVNC Viewer app & DMG.  Leave this blank to generate an unsigned app/DMG.")
@@ -151,11 +157,19 @@ set(EAWT_ADD_MODULES "")
 if(TVNC_INCLUDEJRE)
 	set(EAWT_ADD_MODULES "\n\t\t<string>--add-exports</string>\n\t\t<string>java.desktop/com.apple.eawt=VncViewer</string>")
 endif()
+if(CPU_TYPE STREQUAL "arm64")
+	set(MINSYSVERSION "11")
+	set(FORMAL_CPU_NAME "Apple silicon")
+else()
+	set(MINSYSVERSION "10.7.0")
+	set(FORMAL_CPU_NAME "Intel")
+endif()
 configure_file(release/makemacpkg.in pkgscripts/makemacpkg @ONLY)
 configure_file(release/makemacapp.in pkgscripts/makemacapp)
 configure_file(release/Distribution.xml.in pkgscripts/Distribution.xml)
 configure_file(release/Info.plist.in pkgscripts/Info.plist)
 configure_file(release/Package.plist.in pkgscripts/Package.plist)
+configure_file(release/Welcome.txt.in pkgscripts/Welcome.txt @ONLY)
 configure_file(release/uninstall.in pkgscripts/uninstall)
 configure_file(release/uninstall.applescript.in
 	pkgscripts/uninstall.applescript)

@@ -2,26 +2,26 @@
  * authpam.c - deal with PAM authentication.
  */
 
-/*
- *  Copyright (C) 2010 University Corporation for Atmospheric Research.
- *                     All Rights Reserved.
- *  Copyright (C) 2015, 2017-2018, 2020 D. R. Commander.  All Rights Reserved.
- *  Copyright (C) 2020 Andrew Yoder.  All Rights Reserved.
+/* Copyright (C) 2015, 2017-2018, 2020, 2024 D. R. Commander.
+ *                                           All Rights Reserved.
+ * Copyright (C) 2020 Andrew Yoder.  All Rights Reserved.
+ * Copyright (C) 2010 University Corporation for Atmospheric Research.
+ *                    All Rights Reserved.
  *
- *  This is free software; you can redistribute it and/or modify
- *  it under the terms of the GNU General Public License as published by
- *  the Free Software Foundation; either version 2 of the License, or
- *  (at your option) any later version.
+ * This is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
  *
- *  This software is distributed in the hope that it will be useful,
- *  but WITHOUT ANY WARRANTY; without even the implied warranty of
- *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- *  GNU General Public License for more details.
+ * This software is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  *
- *  You should have received a copy of the GNU General Public License
- *  along with this software; if not, write to the Free Software
- *  Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301,
- *  USA.
+ * You should have received a copy of the GNU General Public License
+ * along with this software; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301,
+ * USA.
  */
 
 #include <stdio.h>
@@ -129,39 +129,39 @@ Bool rfbPAMAuthenticate(rfbClientPtr cl, const char *svc, const char *user,
   pamConv.conv = conv;
   pamConv.appdata_ptr = 0;
   if ((r = pam_start(svc, user, &pamConv, &pamHandle)) != PAM_SUCCESS) {
-    rfbLog("PAMAuthenticate: pam_start: %s\n", pam_strerror(pamHandle, r));
+    RFBLOGID("PAMAuthenticate: pam_start: %s\n", pam_strerror(pamHandle, r));
     return FALSE;
   }
 
   if ((r = pam_set_item(pamHandle, PAM_RHOST, cl->host)) != PAM_SUCCESS) {
-    rfbLog("PAMAuthenticate: pam_set_item PAM_RHOST: %s\n",
-           pam_strerror(pamHandle, r));
+    RFBLOGID("PAMAuthenticate: pam_set_item PAM_RHOST: %s\n",
+             pam_strerror(pamHandle, r));
     return FALSE;
   }
 
   authStatus = pam_authenticate(pamHandle, PAM_DISALLOW_NULL_AUTHTOK);
   if (authStatus != PAM_SUCCESS) {
-    rfbLog("PAMAuthenticate: pam_authenticate: %s\n",
-           pam_strerror(pamHandle, authStatus));
+    RFBLOGID("PAMAuthenticate: pam_authenticate: %s\n",
+             pam_strerror(pamHandle, authStatus));
   } else {
     /* Authentication was successful.  Validate the user's account status. */
     authStatus = pam_acct_mgmt(pamHandle, PAM_DISALLOW_NULL_AUTHTOK);
     if (authStatus != PAM_SUCCESS) {
-      rfbLog("PAMAuthenticate: pam_acct_mgmt: %s\n",
-             pam_strerror(pamHandle, authStatus));
+      RFBLOGID("PAMAuthenticate: pam_acct_mgmt: %s\n",
+               pam_strerror(pamHandle, authStatus));
     } else if (pamSession) {
       if ((authStatus = pam_open_session(pamHandle, 0)) != PAM_SUCCESS) {
-        rfbLog("PAMAuthenticate: pam_open_session: %s\n",
-               pam_strerror(pamHandle, authStatus));
+        RFBLOGID("PAMAuthenticate: pam_open_session: %s\n",
+                 pam_strerror(pamHandle, authStatus));
       } else {
-        rfbLog("Opened PAM session for client %s\n", cl->host);
+        RFBLOGID("Opened PAM session\n");
       }
     }
   }
 
   if (authStatus != PAM_SUCCESS || !pamSession) {
     if ((r = pam_end(pamHandle, authStatus)) != PAM_SUCCESS)
-      rfbLog("PAMAuthenticate: pam_end: %s\n", pam_strerror(pamHandle, r));
+      RFBLOGID("PAMAuthenticate: pam_end: %s\n", pam_strerror(pamHandle, r));
   } else
     cl->pamHandle = pamHandle;
 
@@ -207,13 +207,13 @@ void rfbPAMEnd(rfbClientPtr cl)
 
   if (cl->pamHandle) {
     if ((r = pam_close_session(cl->pamHandle, 0)) != PAM_SUCCESS)
-      rfbLog("PAMEnd: pam_close_session: %s\n",
-             pam_strerror(cl->pamHandle, r));
+      RFBLOGID("PAMEnd: pam_close_session: %s\n",
+               pam_strerror(cl->pamHandle, r));
 
     if ((r = pam_end(cl->pamHandle, PAM_SUCCESS)) != PAM_SUCCESS)
-      rfbLog("PAMEnd: pam_end: %s\n", pam_strerror(cl->pamHandle, r));
+      RFBLOGID("PAMEnd: pam_end: %s\n", pam_strerror(cl->pamHandle, r));
 
-    rfbLog("Closed PAM session for client %s\n", cl->host);
+    RFBLOGID("Closed PAM session\n");
     cl->pamHandle = 0;
   }
 }

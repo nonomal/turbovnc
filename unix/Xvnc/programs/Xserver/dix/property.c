@@ -57,6 +57,10 @@ SOFTWARE.
 #include "swaprep.h"
 #include "xace.h"
 
+#ifdef TURBOVNC
+extern void rfbRootPropertyChange(PropertyPtr pProp);
+#endif
+
 /*****************************************************************
  * Property Stuff
  *
@@ -205,7 +209,8 @@ ProcChangeProperty(ClientPtr client)
     WindowPtr pWin;
     char format, mode;
     unsigned long len;
-    int sizeInBytes, totalSize, err;
+    int sizeInBytes, err;
+    uint64_t totalSize;
 
     REQUEST(xChangePropertyReq);
 
@@ -363,10 +368,8 @@ dixChangeWindowProperty(ClientPtr pClient, WindowPtr pWin, Atom property,
         deliverPropertyNotifyEvent(pWin, PropertyNewValue, pProp);
 
 #ifdef TURBOVNC
-    if (pWin->parent == NullWindow) {
-        extern void rfbRootPropertyChange();
+    if (pWin->parent == NullWindow)
         rfbRootPropertyChange(pProp);
-    }
 #endif
 
     return Success;

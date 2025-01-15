@@ -76,11 +76,6 @@ SOFTWARE.
 #include <X11/extensions/XI2.h>
 #include <X11/extensions/XIproto.h>
 #include <math.h>
-#ifdef TURBOVNC
-#ifdef HAVE_IEEEFP_H
-#include <ieeefp.h>
-#endif
-#endif
 #include <pixman.h>
 #include "exglobals.h"
 #include "exevents.h"
@@ -179,11 +174,7 @@ DeviceSetProperty(DeviceIntPtr dev, Atom property, XIPropertyValuePtr prop,
             return BadValue;
 
         for (i = 0; i < 9; i++)
-#ifdef TURBOVNC
-            if (!finite(f[i]))
-#else
             if (!isfinite(f[i]))
-#endif
                 return BadValue;
 
         if (!dev->valuator)
@@ -460,14 +451,20 @@ DisableDevice(DeviceIntPtr dev, BOOL sendevent)
 {
     DeviceIntPtr *prev, other;
     BOOL enabled;
+    BOOL dev_in_devices_list = FALSE;
     int flags[MAXDEVICES] = { 0 };
 
     if (!dev->enabled)
         return TRUE;
 
-    for (prev = &inputInfo.devices;
-         *prev && (*prev != dev); prev = &(*prev)->next);
-    if (*prev != dev)
+    for (other = inputInfo.devices; other; other = other->next) {
+        if (other == dev) {
+            dev_in_devices_list = TRUE;
+            break;
+        }
+    }
+
+    if (!dev_in_devices_list)
         return FALSE;
 
     TouchEndPhysicallyActiveTouches(dev);
@@ -478,6 +475,13 @@ DisableDevice(DeviceIntPtr dev, BOOL sendevent)
     /* float attached devices */
     if (IsMaster(dev)) {
         for (other = inputInfo.devices; other; other = other->next) {
+            if (!IsMaster(other) && GetMaster(other, MASTER_ATTACHED) == dev) {
+                AttachDevice(NULL, other, NULL);
+                flags[other->id] |= XISlaveDetached;
+            }
+        }
+
+        for (other = inputInfo.off_devices; other; other = other->next) {
             if (!IsMaster(other) && GetMaster(other, MASTER_ATTACHED) == dev) {
                 AttachDevice(NULL, other, NULL);
                 flags[other->id] |= XISlaveDetached;
@@ -516,6 +520,9 @@ DisableDevice(DeviceIntPtr dev, BOOL sendevent)
 
     LeaveWindow(dev);
     SetFocusOut(dev);
+
+    for (prev = &inputInfo.devices;
+         *prev && (*prev != dev); prev = &(*prev)->next);
 
     *prev = dev->next;
     dev->next = inputInfo.off_devices;
@@ -1072,6 +1079,11 @@ CloseDownDevices(void)
      * to NULL and pretend nothing happened.
      */
     for (dev = inputInfo.devices; dev; dev = dev->next) {
+        if (!IsMaster(dev) && !IsFloating(dev))
+            dev->master = NULL;
+    }
+
+    for (dev = inputInfo.off_devices; dev; dev = dev->next) {
         if (!IsMaster(dev) && !IsFloating(dev))
             dev->master = NULL;
     }
@@ -2511,6 +2523,8 @@ RecalculateMasterButtons(DeviceIntPtr slave)
 
     if (master->button && master->button->numButtons != maxbuttons) {
         int i;
+        int last_num_buttons = master->button->numButtons;
+
         DeviceChangedEvent event = {
             .header = ET_Internal,
             .type = ET_DeviceChanged,
@@ -2521,6 +2535,14 @@ RecalculateMasterButtons(DeviceIntPtr slave)
         };
 
         master->button->numButtons = maxbuttons;
+        if (last_num_buttons < maxbuttons) {
+            master->button->xkb_acts = xnfreallocarray(master->button->xkb_acts,
+                                                       maxbuttons,
+                                                       sizeof(XkbAction));
+            memset(&master->button->xkb_acts[last_num_buttons],
+                   0,
+                   (maxbuttons - last_num_buttons) * sizeof(XkbAction));
+        }
 
         memcpy(&event.buttons.names, master->button->labels, maxbuttons *
                sizeof(Atom));

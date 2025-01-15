@@ -1,7 +1,7 @@
-/* Copyright (C) 2009 TightVNC Team
- * Copyright (C) 2009 Red Hat, Inc.
+/* Copyright (C) 2014-2015, 2017 D. R. Commander
  * Copyright 2013 Pierre Ossman for Cendio AB
- * Copyright (C) 2014-2015, 2017 D. R. Commander
+ * Copyright (C) 2009 Red Hat, Inc.
+ * Copyright (C) 2009 TightVNC Team
  *
  * This is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -15,7 +15,7 @@
  *
  * You should have received a copy of the GNU General Public License
  * along with this software; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307,
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301,
  * USA.
  */
 

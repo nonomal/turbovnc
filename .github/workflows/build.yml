@@ -10,8 +10,8 @@ on:
   workflow_dispatch:
 
 env:
-  LJT_VERSION: 2.1.3
-  LJT_GPG_KEY: https://sourceforge.net/projects/libjpeg-turbo/files/LJT-GPG-KEY
+  LJT_VERSION: 3.1.0
+  LJT_GPG_KEY: https://raw.githubusercontent.com/libjpeg-turbo/repo/main/LJT-GPG-KEY
 
 jobs:
   linux:
@@ -20,9 +20,9 @@ jobs:
       - name: Set global environment variables
         run: |
           echo "BRANCH=${GITHUB_BASE_REF:-${GITHUB_REF#refs/heads/}}" >$GITHUB_ENV
-          echo "LJT_URL=https://sourceforge.net/projects/libjpeg-turbo/files/$LJT_VERSION" >>$GITHUB_ENV
+          echo "LJT_URL=https://github.com/libjpeg-turbo/libjpeg-turbo/releases/download/$LJT_VERSION" >>$GITHUB_ENV
       - name: Check out code
-        uses: actions/checkout@v2
+        uses: actions/checkout@v4
       - name: Set up build
         run: |
           mkdir -p $HOME/src/vnc.nightly
@@ -30,7 +30,7 @@ jobs:
           git clone --depth=1 https://github.com/turbovnc/buildscripts.git -b $BRANCH $HOME/src/buildscripts
           mkdir $HOME/libjpeg-turbo-rpm
           pushd $HOME/libjpeg-turbo-rpm
-          wget --no-check-certificate $LJT_URL/libjpeg-turbo-official-$LJT_VERSION.x86_64.rpm $LJT_URL/libjpeg-turbo-official-$LJT_VERSION.aarch64.rpm $LJT_URL/libjpeg-turbo-official-$LJT_VERSION.i386.rpm
+          wget --no-check-certificate $LJT_URL/libjpeg-turbo-official-$LJT_VERSION.x86_64.rpm $LJT_URL/libjpeg-turbo-official-$LJT_VERSION.aarch64.rpm
           popd
           mkdir $HOME/rpmkeys
           wget --no-check-certificate "$LJT_GPG_KEY" -O $HOME/rpmkeys/LJT-GPG-KEY
@@ -38,6 +38,7 @@ jobs:
       - name: Configure GPG signing
         if: ${{github.event_name != 'pull_request'}}
         run: |
+          sudo apt update
           sudo apt install -y gnupg1
           printf "${{secrets.GPG_KEY}}" | base64 --decode | gpg1 --batch --import -
           chmod 600 $HOME/.gnupg/gpg.conf
@@ -45,7 +46,7 @@ jobs:
           echo "GPG_KEY_ID=${{secrets.GPG_KEY_ID}}" >>$HOME/src/buildscripts/gpgsign
           echo "GPG_KEY_PASS=${{secrets.GPG_KEY_PASS}}" >>$HOME/src/buildscripts/gpgsign
       - name: Cache OpenJDK
-        uses: actions/cache@v2
+        uses: actions/cache@v4
         with:
           path: ~/.openjdk
           key: openjdk-${{github.job}}-${{env.BRANCH}}
@@ -57,7 +58,7 @@ jobs:
           mv $HOME/src/vnc.nightly/latest/log-${{github.job}}.txt $HOME/src/vnc.nightly/latest/files/
       - name: Configure AWS
         if: ${{github.event_name != 'pull_request'}}
-        uses: aws-actions/configure-aws-credentials@v1
+        uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-access-key-id: ${{secrets.AWS_ACCESS_KEY_ID}}
           aws-secret-access-key: ${{secrets.AWS_SECRET_ACCESS_KEY}}
@@ -72,11 +73,12 @@ jobs:
       - name: Set global environment variables
         run: |
           echo "BRANCH=${GITHUB_BASE_REF:-${GITHUB_REF#refs/heads/}}" >$GITHUB_ENV
-          echo "LJT_URL=https://sourceforge.net/projects/libjpeg-turbo/files/$LJT_VERSION" >>$GITHUB_ENV
+          echo "LJT_URL=https://github.com/libjpeg-turbo/libjpeg-turbo/releases/download/$LJT_VERSION" >>$GITHUB_ENV
       - name: Check out code
-        uses: actions/checkout@v2
+        uses: actions/checkout@v4
       - name: Set up build
         run: |
+          sudo apt update
           sudo apt install -y libxi-dev
           mkdir $HOME/libjpeg-turbo-deb
           pushd $HOME/libjpeg-turbo-deb
@@ -89,22 +91,23 @@ jobs:
         run: |
           mkdir build
           pushd build
-          cmake -G"Unix Makefiles" -DCMAKE_BUILD_TYPE=RelWithDebInfo -DTVNC_USEPAM=0 -DTVNC_USETLS=0 -DCMAKE_C_FLAGS="--std=gnu90 -Wall -Werror -Wextra -Wdouble-promotion -Wformat=2 -Wformat-overflow=2 -Wformat-signedness -Wmissing-include-dirs -Wshift-overflow=2 -Wswitch-bool -Wno-unused-parameter -Wuninitialized -Wstrict-overflow=2 -Wstringop-overflow=4 -Wstringop-truncation -Wduplicated-cond -Wdeclaration-after-statement -Wshadow -Wunsafe-loop-optimizations -Wcast-align -Wno-cast-function-type -Wjump-misses-init -Wno-sign-compare -Waggregate-return -Wstrict-prototypes -Wold-style-definition -Wmissing-prototypes -Wmissing-declarations -Wno-missing-field-initializers -Wpacked -Wredundant-decls -Wnested-externs -Winline --param max-inline-insns-single=1000 -Wdisabled-optimization" ..
+          cmake -G"Unix Makefiles" -DCMAKE_BUILD_TYPE=RelWithDebInfo -DTVNC_USEPAM=0 -DTVNC_USETLS=0 -DCMAKE_C_FLAGS="--std=gnu90 -Wall -Werror -Wextra -Wdouble-promotion -Wformat=2 -Wformat-overflow=2 -Wformat-signedness -Wmissing-include-dirs -Wshift-overflow=2 -Wswitch-bool -Wno-unused-parameter -Wuninitialized -Wstrict-overflow=2 -Wstringop-overflow=4 -Wstringop-truncation -Wduplicated-cond -Wdeclaration-after-statement -Wshadow -Wunsafe-loop-optimizations -Wcast-align -Wno-cast-function-type -Wno-clobbered -Wjump-misses-init -Wno-sign-compare -Waggregate-return -Wstrict-prototypes -Wold-style-definition -Wmissing-prototypes -Wmissing-declarations -Wno-missing-field-initializers -Wpacked -Wredundant-decls -Wnested-externs -Winline --param max-inline-insns-single=1000 -Wdisabled-optimization -Wno-overlength-strings" ..
           export NUMCPUS=`grep -c '^processor' /proc/cpuinfo`
           make -j$NUMCPUS --load-average=$NUMCPUS
           popd
   macos:
-    runs-on: macos-latest
+    runs-on: macos-13
     steps:
       - name: Set global environment variables
         run: |
           echo "BRANCH=${GITHUB_BASE_REF:-${GITHUB_REF#refs/heads/}}" >$GITHUB_ENV
-          echo "LJT_URL=https://sourceforge.net/projects/libjpeg-turbo/files/$LJT_VERSION" >>$GITHUB_ENV
+          echo "LJT_URL=https://github.com/libjpeg-turbo/libjpeg-turbo/releases/download/$LJT_VERSION" >>$GITHUB_ENV
       - name: Check out code
-        uses: actions/checkout@v2
+        uses: actions/checkout@v4
       - name: Set up build
         run: |
           brew install md5sha1sum
+          sudo xcode-select -s /Applications/Xcode_14.2.app
           mkdir -p $HOME/src/vnc.nightly
           git clone --depth=1 https://github.com/turbovnc/buildscripts.git -b $BRANCH $HOME/src/buildscripts
           mkdir $HOME/libjpeg-turbo-dmg
@@ -124,7 +127,7 @@ jobs:
           echo "GPG_KEY_ID=${{secrets.GPG_KEY_ID}}" >>$HOME/src/buildscripts/gpgsign
           echo "GPG_KEY_PASS=${{secrets.GPG_KEY_PASS}}" >>$HOME/src/buildscripts/gpgsign
       - name: Cache OpenJDK
-        uses: actions/cache@v2
+        uses: actions/cache@v4
         with:
           path: ~/.openjdk
           key: openjdk-${{github.job}}-${{env.BRANCH}}
@@ -134,7 +137,7 @@ jobs:
           mv $HOME/src/vnc.nightly/latest/log-${{github.job}}.txt $HOME/src/vnc.nightly/latest/files/
       - name: Configure AWS
         if: ${{github.event_name != 'pull_request'}}
-        uses: aws-actions/configure-aws-credentials@v1
+        uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-access-key-id: ${{secrets.AWS_ACCESS_KEY_ID}}
           aws-secret-access-key: ${{secrets.AWS_SECRET_ACCESS_KEY}}

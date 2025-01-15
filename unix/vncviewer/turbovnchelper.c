@@ -1,19 +1,20 @@
-/*  Copyright (C)2015-2019, 2021 D. R. Commander.  All Rights Reserved.
+/* Copyright (C) 2015-2019, 2021-2022, 2024 D. R. Commander.
+ *                                          All Rights Reserved.
  *
- *  This is free software; you can redistribute it and/or modify
- *  it under the terms of the GNU General Public License as published by
- *  the Free Software Foundation; either version 2 of the License, or
- *  (at your option) any later version.
+ * This is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
  *
- *  This software is distributed in the hope that it will be useful,
- *  but WITHOUT ANY WARRANTY; without even the implied warranty of
- *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- *  GNU General Public License for more details.
+ * This software is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  *
- *  You should have received a copy of the GNU General Public License
- *  along with this software; if not, write to the Free Software
- *  Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301,
- *  USA.
+ * You should have received a copy of the GNU General Public License
+ * along with this software; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301,
+ * USA.
  */
 
 #ifdef __SUNPRO_C
@@ -32,6 +33,7 @@
 #include <X11/Xatom.h>
 #include "com_turbovnc_vncviewer_Viewport.h"
 #include <X11/Xmd.h>
+#include <X11/Xatom.h>
 #include "rfbproto.h"
 #include "turbovnc_gii.h"
 
@@ -129,6 +131,10 @@ JNIEXPORT void JNICALL Java_com_turbovnc_vncviewer_Viewport_x11FullScreen
   JAWT_X11DrawingSurfaceInfo *x11dsi = NULL;
   jfieldID fid;
   jclass cls;
+  Atom rulesAtom = None, actualType = None;
+  int xkbRules = -1, actualFormat = 0;
+  unsigned long nItems = 0, bytesAfter;
+  unsigned char *data = NULL;
 
   awt.version = JAWT_VERSION_1_3;
   if (!handle) {
@@ -195,12 +201,52 @@ JNIEXPORT void JNICALL Java_com_turbovnc_vncviewer_Viewport_x11FullScreen
   fprintf(stderr, "TurboVNC Helper: %s X11 full-screen mode for window 0x%.8lx\n",
           on ? "Enabling" : "Disabling", x11dsi->drawable);
 
+  if (!(rulesAtom = XInternAtom(x11dsi->display, "_XKB_RULES_NAMES", True)))
+    THROW("Could not get Xkb rules atom");
+  if (XGetWindowProperty(x11dsi->display, DefaultRootWindow(x11dsi->display),
+                         rulesAtom, 0, 1024, False, XA_STRING, &actualType,
+                         &actualFormat, &nItems, &bytesAfter,
+                         &data) != Success ||
+      actualType != XA_STRING || actualFormat != 8 || nItems < 1 || !data)
+    THROW("Could not get Xkb rules");
+  if (!strcmp((char *)data, "base") || !strcmp((char *)data, "xorg"))
+    xkbRules = 0;
+  else if (!strcmp((char *)data, "evdev"))
+    xkbRules = 1;
+
+  if ((fid = (*env)->GetFieldID(env, cls, "xkbRules", "I")) == 0)
+    THROW("Could not store Xkb rules");
+  (*env)->SetIntField(env, obj, fid, xkbRules);
+
   bailout:
+  if (data) XFree(data);
   if (ds) {
     if (dsi) ds->FreeDrawingSurfaceInfo(dsi);
     ds->Unlock(ds);
     awt.FreeDrawingSurface(ds);
   }
+}
+
+
+/*
+ * Allow/disallow keyboard grabbing when using GNOME/Wayland.
+ */
+
+static void xwayland_grab_keyboard(Display *dpy, Window win, int on)
+{
+  XEvent e;
+  Atom _XWAYLAND_MAY_GRAB_KEYBOARD =
+    XInternAtom(dpy, "_XWAYLAND_MAY_GRAB_KEYBOARD", False);
+
+  memset(&e, 0, sizeof(e));
+  e.xclient.type = ClientMessage;
+  e.xclient.message_type = _XWAYLAND_MAY_GRAB_KEYBOARD;
+  e.xclient.display = dpy;
+  e.xclient.window = win;
+  e.xclient.format = 32;
+  e.xclient.data.l[0] = on;
+
+  XSendEvent(dpy, DefaultRootWindow(dpy), False, SubstructureRedirectMask, &e);
 }
 
 
@@ -238,6 +284,7 @@ JNIEXPORT void JNICALL Java_com_turbovnc_vncviewer_Viewport_grabKeyboard
     THROW("Could not get X11 drawing surface info");
 
   XSync(x11dsi->display, False);
+  xwayland_grab_keyboard(x11dsi->display, x11dsi->drawable, on);
   if (on) {
     int count = 5;
 
@@ -301,7 +348,7 @@ JNIEXPORT void JNICALL Java_com_turbovnc_vncviewer_Viewport_grabKeyboard
 
 
 JNIEXPORT void JNICALL Java_com_turbovnc_vncviewer_Viewport_setupExtInput
-  (JNIEnv *env, jobject obj)
+  (JNIEnv *env, jobject obj, jboolean unused)
 {
   jclass cls, eidcls;
   jfieldID fid;

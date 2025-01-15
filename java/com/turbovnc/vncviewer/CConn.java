@@ -1,7 +1,9 @@
-/* Copyright (C) 2002-2005 RealVNC Ltd.  All Rights Reserved.
- * Copyright 2009-2011 Pierre Ossman <ossman@cendio.se> for Cendio AB
- * Copyright (C) 2011-2021 D. R. Commander.  All Rights Reserved.
+/* Copyright (C) 2011-2025 D. R. Commander.  All Rights Reserved.
+ * Copyright (C) 2021 Steffen Kieß
+ * Copyright 2009-2011, 2016-2019 Pierre Ossman <ossman@cendio.se>
+ *                                for Cendio AB
  * Copyright (C) 2011-2015 Brian P. Hinz
+ * Copyright (C) 2002-2005 RealVNC Ltd.  All Rights Reserved.
  *
  * This is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -48,10 +50,10 @@ import com.turbovnc.rfb.Point;
 import com.turbovnc.network.Socket;
 import com.turbovnc.network.TcpSocket;
 
-public class CConn extends CConnection implements UserPasswdGetter,
+public final class CConn extends CConnection implements UserPasswdGetter,
   OptionsDialogCallback, FdInStreamBlockCallback {
 
-  public final PixelFormat getPreferredPF() { return fullColourPF; }
+  public PixelFormat getPreferredPF() { return fullColourPF; }
   static final PixelFormat VERY_LOW_COLOR_PF =
     new PixelFormat(8, 3, false, true, 1, 1, 1, 2, 1, 0);
   static final PixelFormat LOW_COLOR_PF =
@@ -65,17 +67,15 @@ public class CConn extends CConnection implements UserPasswdGetter,
   static final int SUPER_MASK = 1 << 16;
 
   // RFB thread
-  public CConn(VncViewer viewer_, Socket sock_) {
-    sock = sock_;  viewer = viewer_;
+  public CConn(VncViewer viewer_, Socket sock_, Params params_) {
+    params = params_;  sock = sock_;  viewer = viewer_;
     benchmark = viewer.benchFile != null;
     pendingPFChange = false;
     lastServerEncoding = -1;
 
-    opts = new Options(VncViewer.opts);
-
     formatChange = false;  encodingChange = false;
-    currentEncoding = opts.preferredEncoding;
-    options = new OptionsDialog(this);
+    currentEncoding = params.encoding.get();
+    options = new OptionsDialog(this, params);
     options.initDialog();
     clipboardDialog = new ClipboardDialog(this);
     profileDialog = new ProfileDialog(this);
@@ -84,96 +84,140 @@ public class CConn extends CConnection implements UserPasswdGetter,
       alwaysProfile = true;
     firstUpdate = true;  pendingUpdate = false;  continuousUpdates = false;
     forceNonincremental = true;  supportsSyncFence = false;
-    pressedKeys = new HashMap<Integer, Integer>();
-
-    setShared(opts.shared);
+    pressedVKeys = new HashMap<Integer, Integer>();
+    pressedRFBKeys = new HashMap<Integer, Integer>();
 
     cp.supportsDesktopResize = true;
     cp.supportsExtendedDesktopSize = true;
-    cp.supportsClientRedirect = Params.clientRedirect.getValue();
     cp.supportsDesktopRename = true;
     menu = new F8Menu(this);
 
     if (sock != null) {
       String name = sock.getPeerEndpoint();
       vlog.info("Accepted connection from " + name);
+      options.setNode(".listen");
     } else if (!benchmark) {
-      String serverName = null;
+      String server = null;
       int port = -1;
 
-      if (opts.serverName != null &&
-          !Params.alwaysShowConnectionDialog.getValue()) {
-        if (opts.via == null || opts.via.indexOf(':') < 0) {
-          port = opts.port = Hostname.getPort(opts.serverName);
-          serverName = opts.serverName = Hostname.getHost(opts.serverName);
+      if (params.server.get() != null &&
+          !params.alwaysShowConnectionDialog.get()) {
+        if (params.via.get() == null ||
+            Hostname.getColonPos(params.via.get()) < 0) {
+          port = Hostname.getPort(params.server.get());
+          params.port.set(port);
+          params.udsPath = Hostname.getUDSPath(params.server.get());
+          server = Hostname.getHost(params.server.get());
+          params.server.set(server);
+          options.setNode(server);
+          UserPreferences.load(server, params);
         }
       } else {
-        ServerDialog dlg = new ServerDialog(options, opts, this);
+        ServerDialog dlg = new ServerDialog(options, params, this);
         boolean ret = dlg.showDialog();
         if (!ret) {
           close();
           return;
         }
-        port = opts.port;
-        serverName = opts.serverName;
+        port = params.port.get();
+        server = params.server.get();
+        options.setNode(Hostname.getHost(server));
+        UserPreferences.load(Hostname.getHost(server), params);
       }
 
-      if (opts.via != null && opts.via.indexOf(':') >= 0) {
-        port = Hostname.getPort(opts.via);
-        serverName = Hostname.getHost(opts.via);
-      } else if (opts.via != null || opts.tunnel ||
-                 (opts.port == 0 && Params.sessMgrAuto.getValue())) {
-        if (opts.port == 0) {
+      // A Unix domain socket connection to a remote host requires an SSH
+      // tunnel.
+      if (params.udsPath != null && params.via.get() == null &&
+          !params.tunnel.get() && !server.equals("localhost"))
+        params.tunnel.set(true);
+
+      if (params.udsPath != null && params.via.get() == null &&
+          !params.tunnel.get())
+        params.stdioSocket = Tunnel.connectUDSDirect(params.udsPath);
+      else if (params.via.get() != null &&
+               Hostname.getColonPos(params.via.get()) >= 0) {
+        port = Hostname.getPort(params.via.get());
+        server = Hostname.getHost(params.via.get());
+        options.setNode(Hostname.getHost(params.server.get()));
+        UserPreferences.load(Hostname.getHost(params.server.get()), params);
+      } else if (params.via.get() != null || params.tunnel.get() ||
+                 (params.port.get() == 0 && params.sessMgrAuto.get())) {
+        if (params.port.get() == 0) {
           try {
             // TurboVNC Session Manager
-            String session = SessionManager.createSession(opts);
+            String session = SessionManager.createSession(params);
             if (session == null) {
               close();
               return;
             }
-            opts.sessMgrActive = true;
-            opts.port = Hostname.getPort(session);
+            params.sessMgrActive = true;
+            params.port.set(Hostname.getPort(session));
           } catch (Exception e) {
-            throw new ErrorException("Session Manager Error:\n" +
-                                     e.getMessage());
+            if (e instanceof com.jcraft.jsch.JSchException)
+              throw new WarningException("Session Manager Error:\n" +
+                                         e.getMessage());
+            else
+              throw new ErrorException("Session Manager Error:\n" +
+                                       e.getMessage());
           }
         }
         try {
-          Tunnel.createTunnel(opts);
-          port = Hostname.getPort(opts.serverName);
-          serverName = Hostname.getHost(opts.serverName);
+          Tunnel.createTunnel(params);
+          if (params.stdioSocket == null) {
+            port = Hostname.getPort(params.server.get());
+            server = Hostname.getHost(params.server.get());
+          }
         } catch (Exception e) {
-          throw new ErrorException("Could not create SSH tunnel:\n" +
-                                   e.getMessage());
+          if (e instanceof com.jcraft.jsch.JSchException)
+            throw new WarningException("Could not create SSH tunnel:\n" +
+                                       e.getMessage());
+          else
+            throw new ErrorException("Could not create SSH tunnel:\n" +
+                                     e.getMessage());
         }
       }
 
-      if (port == 0) {
+      if (port == 0 && params.stdioSocket == null) {
         try {
           // TurboVNC Session Manager
-          String session = SessionManager.createSession(opts);
+          String session = SessionManager.createSession(params);
           if (session == null) {
             close();
             return;
           }
           port = Hostname.getPort(session);
-          opts.sshSession.disconnect();
+          params.sshSession.disconnect();
         } catch (Exception e) {
-          throw new ErrorException("Session Manager Error:\n" +
-                                   e.getMessage());
+          if (e instanceof com.jcraft.jsch.JSchException)
+            throw new WarningException("Session Manager Error:\n" +
+                                       e.getMessage());
+          else
+            throw new ErrorException("Session Manager Error:\n" +
+                                     e.getMessage());
         }
       }
 
-      sock = new TcpSocket(serverName, port);
-      vlog.info("connected to host " + serverName + " port " + port);
+      if (params.stdioSocket == null) {
+        sock = new TcpSocket(server, port);
+        vlog.info("connected to host " + server + " port " + port);
+      } else {
+        sock = params.stdioSocket;
+        if (server.equals("localhost"))
+          vlog.info("connected to Unix domain socket " + params.udsPath);
+        else
+          vlog.info("connected to host " + server + ", Unix domain socket " +
+                    params.udsPath);
+      }
     }
 
     if (benchmark) {
       state = RFBSTATE_INITIALISATION;
-      reader = new CMsgReaderV3(this, viewer.benchFile);
+      reader = new CMsgReader(this, viewer.benchFile);
     } else {
       sock.inStream().setBlockCallback(this);
-      setServerName(opts.serverName);
+      setServerName(params.server.get());
+      setShared(params.shared.get());
+      menu.updateMenuKey();
       setStreams(sock.inStream(), sock.outStream());
       initialiseProtocol();
     }
@@ -214,17 +258,17 @@ public class CConn extends CConnection implements UserPasswdGetter,
   // RFB thread: getUserPasswd() is called by the CSecurity object when it
   // needs us to read a password from the user.
   @Override
-  public final boolean getUserPasswd(StringBuffer user, StringBuffer passwd) {
+  public boolean getUserPasswd(StringBuffer user, StringBuffer passwd) {
     String title = ((user == null ? "Standard VNC Authentication" :
                                     "Unix Login Authentication") +
                     " [" + csecurity.getDescription() + "]");
-    String passwordFileStr = Params.passwordFile.getValue();
+    String passwordFileStr = params.passwordFile.get();
     PasswdDialog dlg = null;
     String autoPass;
 
-    if (Params.encPassword.getValue() != null) {
+    if (params.encPassword.get() != null) {
       byte[] encryptedPassword = new byte[8];
-      String passwordString = Params.encPassword.getValue();
+      String passwordString = params.encPassword.get();
       if (passwordString.length() != 16)
         throw new ErrorException("Password specified in EncPassword parameter is invalid.");
       for (int c = 0; c < 16; c += 2) {
@@ -237,21 +281,21 @@ public class CConn extends CConnection implements UserPasswdGetter,
         else break;
       }
       autoPass = VncAuth.unobfuscatePasswd(encryptedPassword);
-    } else if (Params.autoPass.getValue()) {
+    } else if (params.autoPass.get()) {
       BufferedReader in = new BufferedReader(new InputStreamReader(System.in));
       try {
         autoPass = in.readLine();
       } catch (IOException e) {
         throw new SystemException(e);
       }
-      Params.autoPass.setParam("0");
+      params.autoPass.set("0");
     } else
-      autoPass = Params.password.getValue();
+      autoPass = params.password.get();
 
     if (autoPass != null && passwd != null) {
       passwd.append(autoPass);
       passwd.setLength(autoPass.length());
-      Params.password.setParam(null);
+      params.password.set(null);
     }
 
     if (user == null && passwordFileStr != null && autoPass == null) {
@@ -277,20 +321,20 @@ public class CConn extends CConnection implements UserPasswdGetter,
     if (user == null) {
       if (autoPass == null)
         dlg = new PasswdDialog(title, (user == null), null, (passwd == null),
-                               opts.sshTunnelActive,
+                               params.sshTunnelActive,
                                csecurity.getChosenType());
     } else {
-      String userName = opts.user;
-      if (opts.sendLocalUsername) {
+      String userName = params.user.get();
+      if (params.sendLocalUsername.get()) {
         userName = (String)System.getProperties().get("user.name");
-        if (Params.localUsernameLC.getValue())
+        if (params.localUsernameLC.get())
           userName = userName.toLowerCase();
         if (passwd == null)
           return true;
       }
       if (autoPass == null)
         dlg = new PasswdDialog(title, (userName != null), userName,
-                               (passwd == null), opts.sshTunnelActive,
+                               (passwd == null), params.sshTunnelActive,
                                csecurity.getChosenType());
       else
         user.append(userName);
@@ -328,15 +372,15 @@ public class CConn extends CConnection implements UserPasswdGetter,
     if (!benchmark)
       requestNewUpdate();
     else {
-      if (Params.colors.getValue() == 8) {
+      if (params.colors.get() == 8) {
         pendingPF = VERY_LOW_COLOR_PF;
-      } else if (Params.colors.getValue() == 64) {
+      } else if (params.colors.get() == 64) {
         pendingPF = LOW_COLOR_PF;
-      } else if (Params.colors.getValue() == 256) {
+      } else if (params.colors.get() == 256) {
         pendingPF = MEDIUM_COLOR_PF;
-      } else if (Params.colors.getValue() == 32768) {
+      } else if (params.colors.get() == 32768) {
         pendingPF = MEDIUMHIGH_COLOR_PF;
-      } else if (Params.colors.getValue() == 65536) {
+      } else if (params.colors.get() == 65536) {
         pendingPF = HIGH_COLOR_PF;
       } else {
         pendingPF = fullColourPF;
@@ -372,10 +416,8 @@ public class CConn extends CConnection implements UserPasswdGetter,
   public void setDesktopSize(int w, int h) {
     super.setDesktopSize(w, h);
     resizeFramebuffer();
-    if (opts.desktopSize.mode == Options.SIZE_MANUAL && !firstUpdate) {
-      opts.desktopSize.width = w;
-      opts.desktopSize.height = h;
-    }
+    if (params.desktopSize.getMode() == DesktopSize.MANUAL && !firstUpdate)
+      params.desktopSize.set(w, h);
   }
 
   // RFB thread: setExtendedDesktopSize() is a more advanced version of
@@ -390,10 +432,8 @@ public class CConn extends CConnection implements UserPasswdGetter,
     }
 
     resizeFramebuffer();
-    if (opts.desktopSize.mode == Options.SIZE_MANUAL && !firstUpdate) {
-      opts.desktopSize.width = w;
-      opts.desktopSize.height = h;
-    }
+    if (params.desktopSize.getMode() == DesktopSize.MANUAL && !firstUpdate)
+      params.desktopSize.set(w, h);
 
     // Normally, the TurboVNC Viewer will not create a multi-screen viewer
     // window that extends beyond the unshared boundary of any physical screen
@@ -411,16 +451,6 @@ public class CConn extends CConnection implements UserPasswdGetter,
     if (layout.numScreens() > 1 ||
         (layout.numScreens() > 0 && layout.screens.get(0).id != 0))
       serverXinerama = true;
-  }
-
-  // RFB thread: clientRedirect() migrates the client to another host/port.
-  public void clientRedirect(int port, String host,
-                             String x509subject) {
-    sock.close();
-    setServerPort(port);
-    sock = new TcpSocket(host, port);
-    vlog.info("Redirected to " + host + ":" + port);
-    VncViewer.newViewer(viewer, sock, true);
   }
 
   // RFB thread: setName() is called when the desktop name changes.
@@ -460,17 +490,17 @@ public class CConn extends CConnection implements UserPasswdGetter,
                             0, null);
 
       if (!cp.supportsSetDesktopSize) {
-        if (opts.desktopSize.mode == Options.SIZE_AUTO)
+        if (params.desktopSize.getMode() == DesktopSize.AUTO)
           vlog.info("Disabling automatic desktop resizing because the server doesn't support it.");
-        if (opts.desktopSize.mode == Options.SIZE_MANUAL)
+        if (params.desktopSize.getMode() == DesktopSize.MANUAL)
           vlog.info("Ignoring desktop resize request because the server doesn't support it.");
-        opts.desktopSize.mode = Options.SIZE_SERVER;
+        params.desktopSize.setMode(DesktopSize.SERVER);
       }
 
-      if (opts.desktopSize.mode == Options.SIZE_MANUAL)
-        sendDesktopSize(opts.desktopSize.width, opts.desktopSize.height,
-                        false);
-      else if (opts.desktopSize.mode == Options.SIZE_AUTO) {
+      if (params.desktopSize.getMode() == DesktopSize.MANUAL)
+        sendDesktopSize(params.desktopSize.getWidth(),
+                        params.desktopSize.getHeight(), false);
+      else if (params.desktopSize.getMode() == DesktopSize.AUTO) {
         Dimension availableSize = viewport.getAvailableSize();
         sendDesktopSize(availableSize.width, availableSize.height, false);
       }
@@ -491,13 +521,13 @@ public class CConn extends CConnection implements UserPasswdGetter,
     updates++;
     tElapsed = Utils.getTime() - tStart;
 
-    if (tElapsed > (double)Params.profileInt.getValue() && !benchmark) {
+    if (tElapsed > (double)params.profileInt.get() && !benchmark) {
       if (profileDialog.isVisible()) {
         String str;
-        str = String.format("%.3f", (double)updates / tElapsed);
+        str = String.format("%.3f", updates / tElapsed);
         profileDialog.upsVal.setText(str);
-        str = String.format("%.3f", (double)sock.inStream().getBytesRead() /
-                            125000. / tElapsed);
+        str = String.format("%.3f", sock.inStream().getBytesRead() / 125000. /
+                            tElapsed);
         profileDialog.tpVal.setText(str);
 
         str = String.format("%.3f", sock.inStream().getReadTime() /
@@ -541,8 +571,7 @@ public class CConn extends CConnection implements UserPasswdGetter,
         System.out.format("Total:   %.3f updates/sec,  %.3f Mpixels/sec,  %.3f Mbits/sec\n",
                           (double)updates / tElapsed,
                           (double)decodePixels / 1000000. / tElapsed,
-                          (double)sock.inStream().getBytesRead() / 125000. /
-                            tElapsed);
+                          sock.inStream().getBytesRead() / 125000. / tElapsed);
         System.out.format("Decode:  %.3f Mpixels,  %.3f Mpixels/sec,  %d rect,\n",
                           (double)decodePixels / 1000000.,
                           (double)decodePixels / 1000000. / tDecode,
@@ -573,7 +602,7 @@ public class CConn extends CConnection implements UserPasswdGetter,
     }
   }
 
-  public final ScreenSet computeScreenLayout(int width, int height) {
+  public ScreenSet computeScreenLayout(int width, int height) {
     java.awt.Point vpPos = viewport.getContentPane().getLocationOnScreen();
     Rectangle vpRect = viewport.getContentPane().getBounds();
     ScreenSet layout;
@@ -590,13 +619,13 @@ public class CConn extends CConnection implements UserPasswdGetter,
 
         for (Iterator<Screen> iter = layout.screens.iterator(); iter.hasNext();
              i++) {
-          Screen screen = (Screen)iter.next();
+          Screen screen = iter.next();
           if (i > 0)
             iter.remove();
         }
       }
 
-      Screen screen0 = (Screen)layout.screens.iterator().next();
+      Screen screen0 = layout.screens.iterator().next();
       screen0.dimensions.tl.x = 0;
       screen0.dimensions.tl.y = 0;
       screen0.dimensions.br.x = width;
@@ -609,7 +638,7 @@ public class CConn extends CConnection implements UserPasswdGetter,
 
     vpRect.x = vpPos.x;
     vpRect.y = vpPos.y;
-    if (opts.showToolbar && !opts.fullScreen) {
+    if (params.toolbar.get() && !params.fullScreen.get()) {
       vpRect.y += 22;
       vpRect.height -= 22;
     }
@@ -660,15 +689,15 @@ public class CConn extends CConnection implements UserPasswdGetter,
     if (!cp.supportsSetDesktopSize)
       return;
 
-    if (opts.desktopSize.mode == Options.SIZE_AUTO)
+    if (params.desktopSize.getMode() == DesktopSize.AUTO)
       layout = computeScreenLayout(width, height);
     else {
-      if (opts.desktopSize.mode != Options.SIZE_MANUAL ||
-          opts.desktopSize.layout == null) {
+      if (params.desktopSize.getMode() != DesktopSize.MANUAL ||
+          params.desktopSize.getLayout() == null) {
         vlog.error("ERROR: Unexpected desktop size configuration");
         return;
       }
-      layout = opts.desktopSize.layout;
+      layout = params.desktopSize.getLayout();
       // Map client screens to server screen IDs in the server's preferred
       // order.  This allows us to control the server's screen order from the
       // client.
@@ -701,13 +730,8 @@ public class CConn extends CConnection implements UserPasswdGetter,
   }
 
   public void bell() {
-    if (opts.acceptBell)
+    if (params.acceptBell.get())
       desktop.getToolkit().beep();
-  }
-
-  public void serverCutText(String str, int len) {
-    if (opts.recvClipboard)
-      clipboardDialog.serverCutText(str, len);
   }
 
   public void startDecodeTimer() {
@@ -816,6 +840,43 @@ public class CConn extends CConnection implements UserPasswdGetter,
   }
 
   // RFB thread
+  public void handleClipboardAnnounce(boolean available)
+  {
+    if (!params.recvClipboard.get())
+      return;
+
+    if (!available) {
+      vlog.debug("Clipboard is no longer available on the server.");
+      return;
+    }
+
+    vlog.debug("Requesting clipboard data from server");
+    requestClipboard();
+  }
+
+  // RFB thread
+  public void handleClipboardData(String data)
+  {
+    if (!params.recvClipboard.get())
+      return;
+
+    vlog.debug("Got clipboard data (" + data.length() + " characters)");
+
+    clipboardDialog.serverCutText(data);
+  }
+
+  // RFB thread
+  public void handleClipboardRequest()
+  {
+    if (!params.sendClipboard.get())
+      return;
+
+    String contents = clipboardDialog.getContents();
+
+    sendClipboardData(contents);
+  }
+
+  // RFB thread
   public void enableGII() {
     cp.supportsGII = true;
     if (viewport != null && !benchmark) {
@@ -853,8 +914,7 @@ public class CConn extends CConnection implements UserPasswdGetter,
     if (dev.valuators.size() > 0) {
       for (int i = e.firstValuator; i < e.firstValuator + e.numValuators;
            i++) {
-        ExtInputDevice.Valuator v =
-          (ExtInputDevice.Valuator)dev.valuators.get(i);
+        ExtInputDevice.Valuator v = dev.valuators.get(i);
         if (i == 0) {
           double x = (double)(e.valuators[i] - v.rangeMin) /
                      (double)(v.rangeMax - v.rangeMin) *
@@ -885,7 +945,7 @@ public class CConn extends CConnection implements UserPasswdGetter,
                 y / desktop.scaleHeightRatio;
           }
           e.valuators[i - e.firstValuator] =
-            (int)((double)y / (double)(cp.height - 1) *
+            (int)(y / (double)(cp.height - 1) *
                   (double)(v.rangeMax - v.rangeMin) +
                   (double)v.rangeMin + 0.5);
           if (e.valuators[i - e.firstValuator] > v.rangeMax)
@@ -898,6 +958,97 @@ public class CConn extends CConnection implements UserPasswdGetter,
 
     e.print();
     writer().writeGIIEvent(dev, e);
+  }
+
+  // RFB thread
+  public void enableQEMUExtKeyEvent() {
+    if (params.serverKeyMap.get() && viewport.getXkbRules() >= 0 &&
+        viewport.getXkbRules() <= 1) {
+      vlog.info("Enabling QEMU Extended Key Event");
+      cp.supportsQEMUExtKeyEvent = true;
+    }
+  }
+
+  // Sync server's LED state with the client's
+  public void pushLEDState()
+  {
+    // Server support?
+    if (cp.ledState == RFB.LED_UNKNOWN)
+      return;
+
+    boolean serverCapsLockState = (cp.ledState & RFB.LED_CAPS_LOCK) != 0;
+    boolean serverNumLockState = (cp.ledState & RFB.LED_NUM_LOCK) != 0;
+    boolean serverScrollLockState = (cp.ledState & RFB.LED_SCROLL_LOCK) != 0;
+
+    boolean clientCapsLockState =
+      Toolkit.getDefaultToolkit().getLockingKeyState(KeyEvent.VK_CAPS_LOCK);
+    boolean clientNumLockState = Utils.isMac() ? serverNumLockState :
+      Toolkit.getDefaultToolkit().getLockingKeyState(KeyEvent.VK_NUM_LOCK);
+    boolean clientScrollLockState = Utils.isMac() ? serverScrollLockState :
+      Toolkit.getDefaultToolkit().getLockingKeyState(KeyEvent.VK_SCROLL_LOCK);
+
+    if (serverCapsLockState != clientCapsLockState) {
+      vlog.debug("Sending fake key events to sync server's Caps Lock state with client's");
+      writeKeyPress(Keysyms.CAPS_LOCK, 0x3a, "key PRESS, RFB keycode 0x3a");
+      writeKeyRelease(0x3a, "key release, RFB keycode 0x3a");
+    }
+    if (serverNumLockState != clientNumLockState) {
+      vlog.debug("Sending fake key events to sync server's Num Lock state with client's");
+      writeKeyPress(Keysyms.NUM_LOCK, 0x45, "key PRESS, RFB keycode 0x45");
+      writeKeyRelease(0x45, "key release, RFB keycode 0x45");
+    }
+    if (serverScrollLockState != clientScrollLockState) {
+      vlog.debug("Sending fake key events to sync server's Scroll Lock state with client's");
+      writeKeyPress(Keysyms.SCROLL_LOCK, 0x46, "key PRESS, RFB keycode 0x46");
+      writeKeyRelease(0x46, "key release, RFB keycode 0x46");
+    }
+  }
+
+  // RFB thread
+  public void setLEDState(int state)
+  {
+    if (firstLEDState)
+      vlog.info("Enabling LED State");
+
+    vlog.debug("Server's LED state: 0x" + Integer.toHexString(state));
+    cp.ledState = state;
+
+    // The first message is just the server announcing that it supports one of
+    // the LED state extensions.  When the viewer window gains focus, we will
+    // send fake lock key events, if necessary, in order to sync the server's
+    // LED state with the client's.  However, if we already have focus, then we
+    // need to do that here.
+    if (firstLEDState) {
+      firstLEDState = false;
+      if (viewport.hasFocus())
+        pushLEDState();
+      return;
+    }
+
+    if (!viewport.hasFocus())
+      return;
+
+    // Sync client's LED state with the server's
+    boolean serverCapsLockState = (state & RFB.LED_CAPS_LOCK) != 0;
+    boolean serverNumLockState = (state & RFB.LED_NUM_LOCK) != 0;
+    boolean serverScrollLockState = (state & RFB.LED_SCROLL_LOCK) != 0;
+
+    boolean clientCapsLockState =
+      Toolkit.getDefaultToolkit().getLockingKeyState(KeyEvent.VK_CAPS_LOCK);
+    boolean clientNumLockState = Utils.isMac() ? serverNumLockState :
+      Toolkit.getDefaultToolkit().getLockingKeyState(KeyEvent.VK_NUM_LOCK);
+    boolean clientScrollLockState = Utils.isMac() ? serverScrollLockState :
+      Toolkit.getDefaultToolkit().getLockingKeyState(KeyEvent.VK_SCROLL_LOCK);
+
+    if (serverCapsLockState != clientCapsLockState)
+      Toolkit.getDefaultToolkit().setLockingKeyState(KeyEvent.VK_CAPS_LOCK,
+                                                     serverCapsLockState);
+    if (serverNumLockState != clientNumLockState)
+      Toolkit.getDefaultToolkit().setLockingKeyState(KeyEvent.VK_NUM_LOCK,
+                                                     serverNumLockState);
+    if (serverScrollLockState != clientScrollLockState)
+      Toolkit.getDefaultToolkit().setLockingKeyState(KeyEvent.VK_SCROLL_LOCK,
+                                                     serverScrollLockState);
   }
 
   // RFB thread
@@ -948,16 +1099,19 @@ public class CConn extends CConnection implements UserPasswdGetter,
           // following code thus sets a flag to temporarily disable the
           // component resize handler, then it resizes the full-screen viewport
           // accordingly.
-          if (opts.desktopSize.mode == Options.SIZE_AUTO && opts.fullScreen)
+          if (params.desktopSize.getMode() == DesktopSize.AUTO &&
+              params.fullScreen.get())
             pendingServerResize = true;
           desktop.resize();
-          if (opts.desktopSize.mode == Options.SIZE_AUTO && !opts.fullScreen)
+          if (params.desktopSize.getMode() == DesktopSize.AUTO &&
+              !params.fullScreen.get())
             // Have to do this in order to trigger the resize handler, even if
             // we're not actually changing the component size.
             recreateViewport(false);
           else
             reconfigureViewport(false);
-          if (opts.desktopSize.mode == Options.SIZE_AUTO && opts.fullScreen)
+          if (params.desktopSize.getMode() == DesktopSize.AUTO &&
+              params.fullScreen.get())
             pendingServerResize = false;
         }
       });
@@ -979,7 +1133,7 @@ public class CConn extends CConnection implements UserPasswdGetter,
     if (desktop == null) return;
 
     if (viewport != null) {
-      if (opts.fullScreen) {
+      if (params.fullScreen.get()) {
         savedState = viewport.getExtendedState();
         viewport.setExtendedState(JFrame.NORMAL);
         savedRect = viewport.getBounds();
@@ -987,21 +1141,19 @@ public class CConn extends CConnection implements UserPasswdGetter,
       if (viewport.timer != null)
         viewport.timer.stop();
       viewport.grabKeyboardHelper(false);
-      if (Params.currentMonitorIsPrimary.getValue())
+      if (params.currentMonitorIsPrimary.get())
         oldViewportBounds = viewport.getBounds();
       viewport.dispose();
     }
     viewport = new Viewport(this);
-    // When in Lion full-screen mode, we need to create the viewport as if
-    // full-screen mode was disabled.
-    viewport.setUndecorated(opts.fullScreen);
+    viewport.setUndecorated(params.fullScreen.get());
     desktop.setViewport(viewport);
     reconfigureViewport(restore);
     if ((cp.width > 0) && (cp.height > 0))
       viewport.setVisible(true);
     if (Utils.isX11())
-      viewport.x11FullScreenHelper(opts.fullScreen);
-    if (opts.fullScreen && viewport.lionFSSupported())
+      viewport.x11FullScreenHelper(params.fullScreen.get());
+    if (params.fullScreen.get() && viewport.lionFSSupported())
       viewport.toggleLionFS();
     desktop.requestFocusInWindow();
     if (shouldGrab())
@@ -1079,7 +1231,7 @@ public class CConn extends CConnection implements UserPasswdGetter,
 
   // EDT
   public Rectangle getSpannedSize() {
-    boolean fullScreenWindow = opts.fullScreen &&
+    boolean fullScreenWindow = params.fullScreen.get() &&
                                (!Utils.isMac() || viewport.lionFSSupported());
     GraphicsEnvironment ge = GraphicsEnvironment.getLocalGraphicsEnvironment();
     GraphicsDevice[] gsList = ge.getScreenDevices();
@@ -1096,8 +1248,8 @@ public class CConn extends CConnection implements UserPasswdGetter,
     viewport.leftMon = viewport.rightMon = viewport.topMon =
       viewport.bottomMon = 0;
 
-    if (opts.scalingFactor == Options.SCALE_AUTO ||
-        opts.scalingFactor == Options.SCALE_FIXEDRATIO) {
+    if (params.scale.get() == ScaleParameter.AUTO ||
+        params.scale.get() == ScaleParameter.FIXEDRATIO) {
       sw = cp.width;
       sh = cp.height;
     }
@@ -1133,10 +1285,11 @@ public class CConn extends CConnection implements UserPasswdGetter,
           primaryGD = gs;
           primaryID = i;
         }
-        if (Params.currentMonitorIsPrimary.getValue() && viewport != null) {
+        if (params.currentMonitorIsPrimary.get() && viewport != null) {
           Rectangle vpRect = oldViewportBounds != null ? oldViewportBounds :
                              viewport.getBounds();
-          if (opts.fullScreen && savedRect.width > 0 && savedRect.height > 0)
+          if (params.fullScreen.get() && savedRect.width > 0 &&
+              savedRect.height > 0)
             vpRect = savedRect;
           vpRect = s.intersection(vpRect);
           int area = vpRect.isEmpty() ? 0 : vpRect.width * vpRect.height;
@@ -1197,28 +1350,35 @@ public class CConn extends CConnection implements UserPasswdGetter,
     }
 
     // Enable Primary spanning if explicitly selected, or ...
-    if (opts.span == Options.SPAN_PRIMARY ||
+    if (params.span.get() == SpanParameter.PRIMARY ||
         // Automatic spanning + Manual or Server resizing is enabled and the
         // server desktop fits on the primary monitor, or ...
-        (opts.span == Options.SPAN_AUTO &&
-         opts.desktopSize.mode != Options.SIZE_AUTO &&
+        (params.span.get() == SpanParameter.AUTO &&
+         params.desktopSize.getMode() != DesktopSize.AUTO &&
          (sw <= primary.width || span.width <= primary.width) &&
          (sh <= primary.height || span.height <= primary.height)) ||
         // Automatic spanning + Auto resizing is enabled and we're in windowed
         // mode, or ...
-        (opts.span == Options.SPAN_AUTO &&
-         opts.desktopSize.mode == Options.SIZE_AUTO && !opts.fullScreen) ||
+        (params.span.get() == SpanParameter.AUTO &&
+         params.desktopSize.getMode() == DesktopSize.AUTO &&
+         !params.fullScreen.get()) ||
         // We're using X11, and we're in windowed mode or the helper library
         // isn't available (multi-screen spanning doesn't even pretend to work
         // under X11 except for full-screen windows, and even then, the
         // appropriate WM hints must be set using C.)
-        (Utils.isX11() && (!opts.fullScreen || !Helper.isAvailable()))) {
+        (Utils.isX11() &&
+         (!params.fullScreen.get() || !Helper.isAvailable())) ||
+        // We're using macOS, and "Displays have separate Spaces" is enabled in
+        // the system settings (or the state of "Displays have separate Spaces"
+        // cannot be determined because the helper library isn't available.)
+        (Utils.isMac() && Utils.displaysHaveSeparateSpacesHelper())) {
       span = primary;
       viewport.leftMon = viewport.rightMon = viewport.topMon =
         viewport.bottomMon = primaryID;
     } else if (equal ||
                (fullScreenWindow && serverXinerama &&
-                opts.desktopSize.mode == Options.SIZE_AUTO && !Utils.isX11()))
+                params.desktopSize.getMode() == DesktopSize.AUTO &&
+                !Utils.isX11()))
       span = new Rectangle(tLeft, tTop, tRight - tLeft, tBottom - tTop);
 
     vlog.debug("Spanned " + (fullScreenWindow ? "FS " : "work ") + "area: " +
@@ -1239,14 +1399,14 @@ public class CConn extends CConnection implements UserPasswdGetter,
     Rectangle span = getSpannedSize();
     Dimension vpSize;
 
-    if ((opts.scalingFactor == Options.SCALE_AUTO ||
-         opts.scalingFactor == Options.SCALE_FIXEDRATIO) &&
-        !opts.fullScreen) {
+    if ((params.scale.get() == ScaleParameter.AUTO ||
+         params.scale.get() == ScaleParameter.FIXEDRATIO) &&
+        !params.fullScreen.get()) {
       w = cp.width;
       h = cp.height;
     }
 
-    if (opts.desktopSize.mode == Options.SIZE_AUTO && manual) {
+    if (params.desktopSize.getMode() == DesktopSize.AUTO && manual) {
       w = span.width;
       h = span.height;
     }
@@ -1260,14 +1420,14 @@ public class CConn extends CConnection implements UserPasswdGetter,
       viewport.setExtendedState(JFrame.NORMAL);
     int x = (span.width - w) / 2 + span.x;
     int y = (span.height - h) / 2 + span.y;
-    if (opts.fullScreen) {
+    if (params.fullScreen.get()) {
       java.awt.Point vpPos = viewport.getLocation();
       boolean checkLayoutNow = false;
       vpSize = viewport.getSize();
 
       // If the window size is unchanged, check whether we need to force a
       // desktop resize message to inform the server of a new screen layout
-      if (opts.desktopSize.mode == Options.SIZE_AUTO && manual &&
+      if (params.desktopSize.getMode() == DesktopSize.AUTO && manual &&
           span.width == vpSize.width && span.height == vpSize.height) {
         if (vpPos.x != span.x || vpPos.y != span.y)
           checkLayout = true;
@@ -1307,9 +1467,9 @@ public class CConn extends CConnection implements UserPasswdGetter,
 
     // Attempt to prevent cases in which the presence of one scrollbar will
     // unnecessarily cause the other scrollbar to appear
-    if (opts.desktopSize.mode != Options.SIZE_AUTO &&
-        opts.scalingFactor != Options.SCALE_FIXEDRATIO &&
-        opts.scalingFactor != Options.SCALE_AUTO) {
+    if (params.desktopSize.getMode() != DesktopSize.AUTO &&
+        params.scale.get() != ScaleParameter.FIXEDRATIO &&
+        params.scale.get() != ScaleParameter.AUTO) {
       int clientw = w - vpBorder.width, clienth = h - vpBorder.height;
       int sbWidth = UIManager.getInt("ScrollBar.width");
       if (desktop.scaledWidth > clientw && h + sbWidth <= span.height) {
@@ -1326,7 +1486,7 @@ public class CConn extends CConnection implements UserPasswdGetter,
     vpSize = viewport.getSize();
     // If the window size is unchanged, check whether we need to force a
     // desktop resize message to inform the server of a new screen layout
-    if (opts.desktopSize.mode == Options.SIZE_AUTO && manual &&
+    if (params.desktopSize.getMode() == DesktopSize.AUTO && manual &&
         w == vpSize.width && h == vpSize.height)
       checkLayout = true;
 
@@ -1336,8 +1496,8 @@ public class CConn extends CConnection implements UserPasswdGetter,
   // EDT
   private void reconfigureViewport(boolean restore) {
     desktop.setScaledSize();
-    if (!opts.fullScreen && savedRect.width > 0 && savedRect.height > 0 &&
-        restore) {
+    if (!params.fullScreen.get() && savedRect.width > 0 &&
+        savedRect.height > 0 && restore) {
       if (savedState >= 0)
         viewport.setExtendedState(savedState);
       viewport.setGeometry(savedRect.x, savedRect.y, savedRect.width,
@@ -1355,8 +1515,8 @@ public class CConn extends CConnection implements UserPasswdGetter,
     // need to ensure that the appropriate scrollbar policy is set and the
     // viewport is repainted.
     if (desktop != null) {
-      if (opts.scalingFactor == Options.SCALE_AUTO ||
-          opts.scalingFactor == Options.SCALE_FIXEDRATIO) {
+      if (params.scale.get() == ScaleParameter.AUTO ||
+          params.scale.get() == ScaleParameter.FIXEDRATIO) {
         viewport.sp.setHorizontalScrollBarPolicy(
           ScrollPaneConstants.HORIZONTAL_SCROLLBAR_NEVER);
         viewport.sp.setVerticalScrollBarPolicy(
@@ -1382,15 +1542,15 @@ public class CConn extends CConnection implements UserPasswdGetter,
       // Catch incorrect requestNewUpdate calls
       assert(!pendingUpdate || supportsSyncFence);
 
-      if (Params.colors.getValue() == 8) {
+      if (params.colors.get() == 8) {
         pf = VERY_LOW_COLOR_PF;
-      } else if (Params.colors.getValue() == 64) {
+      } else if (params.colors.get() == 64) {
         pf = LOW_COLOR_PF;
-      } else if (Params.colors.getValue() == 256) {
+      } else if (params.colors.get() == 256) {
         pf = MEDIUM_COLOR_PF;
-      } else if (Params.colors.getValue() == 32768) {
+      } else if (params.colors.get() == 32768) {
         pf = MEDIUMHIGH_COLOR_PF;
-      } else if (Params.colors.getValue() == 65536) {
+      } else if (params.colors.get() == 65536) {
         pf = HIGH_COLOR_PF;
       } else {
         pf = fullColourPF;
@@ -1405,7 +1565,7 @@ public class CConn extends CConnection implements UserPasswdGetter,
         pf.write(memStream);
 
         writer().writeFence(RFB.FENCE_FLAG_REQUEST | RFB.FENCE_FLAG_SYNC_NEXT,
-                            memStream.length(), (byte[])memStream.data());
+                            memStream.length(), memStream.data());
       } else {
         // New update requests are sent out before processing the last update,
         // so we cannot switch our internal format right now (doing so would
@@ -1438,7 +1598,7 @@ public class CConn extends CConnection implements UserPasswdGetter,
   // The following methods are all called from the EDT.
 
   public boolean confirmClose() {
-    if (Params.confirmClose.getValue() && state() == RFBSTATE_NORMAL &&
+    if (params.confirmClose.get() && state() == RFBSTATE_NORMAL &&
         !shuttingDown && sock != null) {
       JOptionPane pane;
       Object[] dlgOptions = { UIManager.getString("OptionPane.yesButtonText"),
@@ -1465,15 +1625,23 @@ public class CConn extends CConnection implements UserPasswdGetter,
   // close() shuts down the socket, thus waking up the RFB thread.
   public void close() { close(true); }
 
-  public void close(boolean disposeViewport) {
+  public synchronized void close(boolean disposeViewport) {
     if (disposeViewport && !confirmClose()) return;
+    if (timer != null) {
+      timer.stop();
+      timer = null;
+    }
     deleteWindow(disposeViewport);
     shuttingDown = true;
     if (sock != null)
       sock.shutdown();
-    if (opts.sshSession != null) {
-      opts.sshSession.disconnect();
-      opts.sshSession = null;
+    if (params.sshSession != null) {
+      params.sshSession.disconnect();
+      params.sshSession = null;
+    }
+    if (params.stdioSocket != null) {
+      params.stdioSocket.shutdown();
+      params.stdioSocket = null;
     }
     if (reader != null)
       reader.close();
@@ -1489,15 +1657,23 @@ public class CConn extends CConnection implements UserPasswdGetter,
   // Menu callbacks.  These are guaranteed only to be called after serverInit()
   // has been called, since the menu is only accessible from the DesktopWindow.
 
-  void showMenu(int x, int y) {
+  void showMenu() {
+    int sx = (desktop.scaleWidthRatio == 1.00) ?
+      desktop.lastX : (int)Math.floor(desktop.lastX * desktop.scaleWidthRatio);
+    int sy = (desktop.scaleHeightRatio == 1.00) ?
+      desktop.lastY :
+      (int)Math.floor(desktop.lastY * desktop.scaleHeightRatio);
+    java.awt.Point p = new java.awt.Point(desktop.lastX, desktop.lastY);
+    p.translate(sx - desktop.lastX, sy - desktop.lastY);
+
     if (Utils.isWindows())
       UIManager.put("Button.showMnemonics", true);
-    if (viewport != null && (viewport.dx > 0 || viewport.dy > 0)) {
-      x += viewport.dx;
-      y += viewport.dy;
-    }
-    menu.show(desktop, x, y);
+    if (viewport != null && (viewport.dx > 0 || viewport.dy > 0))
+      p.translate(viewport.dx, viewport.dy);
+    menu.show(desktop, (int)p.getX(), (int)p.getY());
   }
+
+  boolean isMenuVisible() { return menu.isVisible(); }
 
   void showAbout() {
     VncViewer.showAbout(viewport);
@@ -1505,10 +1681,10 @@ public class CConn extends CConnection implements UserPasswdGetter,
 
   String getEncryptionProtocol() {
     String protocol = csecurity.getProtocol();
-    if (protocol.equals("None") && opts.sshTunnelActive)
+    if (protocol.equals("None") && params.sshTunnelActive)
       return "SSH";
     else
-      return protocol + (opts.sshTunnelActive ? " (+ SSH)" : "");
+      return protocol + (params.sshTunnelActive ? " (+ SSH)" : "");
   }
 
   void showInfo() {
@@ -1539,29 +1715,26 @@ public class CConn extends CConnection implements UserPasswdGetter,
 
   public void losslessRefresh() {
     int currentEncodingSave = currentEncoding;
-    int compressLevelSave = opts.compressLevel;
-    int qualitySave = opts.quality;
-    boolean allowJpegSave = opts.allowJpeg;
+    int compressLevelSave = params.compressLevel.get();
+    boolean jpegSave = params.jpeg.get();
     boolean alreadyLossless = false;
 
-    if (currentEncoding == RFB.ENCODING_TIGHT && opts.compressLevel == 1 &&
-        opts.quality == -1 && !opts.allowJpeg)
+    if (currentEncoding == RFB.ENCODING_TIGHT &&
+        params.compressLevel.get() == 1 && !params.jpeg.get())
       alreadyLossless = true;
 
     if (!alreadyLossless) {
       currentEncoding = RFB.ENCODING_TIGHT;
-      opts.compressLevel = 1;
-      opts.quality = -1;
-      opts.allowJpeg = false;
+      params.compressLevel.set(1);
+      params.jpeg.set(false);
       encodingChange = true;
       checkEncodings();
     }
     refresh();
     if (!alreadyLossless) {
       currentEncoding = currentEncodingSave;
-      opts.compressLevel = compressLevelSave;
-      opts.quality = qualitySave;
-      opts.allowJpeg = allowJpegSave;
+      params.compressLevel.set(compressLevelSave);
+      params.jpeg.set(jpegSave);
       encodingChange = true;
       checkEncodings();
     }
@@ -1572,7 +1745,7 @@ public class CConn extends CConnection implements UserPasswdGetter,
   // the EDT.
 
   public boolean isUnixLoginForced() {
-    return (opts.user != null || opts.sendLocalUsername);
+    return (params.user.get() != null || params.sendLocalUsername.get());
   }
 
   public void setTightOptions() {
@@ -1583,58 +1756,59 @@ public class CConn extends CConnection implements UserPasswdGetter,
   }
 
   public void setOptions() {
-    options.setOptions(opts, cp.supportsSetDesktopSize || firstUpdate,
+    options.setOptions(cp.supportsSetDesktopSize || firstUpdate,
                        state() == RFBSTATE_NORMAL, state() == RFBSTATE_NORMAL,
                        state() == RFBSTATE_NORMAL);
     setTightOptions();
-    if (opts.scalingFactor != Options.SCALE_AUTO &&
-        opts.scalingFactor != Options.SCALE_FIXEDRATIO && desktop != null)
+    if (params.scale.get() != ScaleParameter.AUTO &&
+        params.scale.get() != ScaleParameter.FIXEDRATIO && desktop != null)
       desktop.setScaledSize();
   }
 
   public void getOptions() {
     boolean recreate = false, reconfigure = false, deleteRestore = false;
 
-    Options oldOpts = new Options(opts);
+    Params oldParams = new Params(params);
 
-    options.getOptions(opts);
+    options.getOptions();
 
-    if (opts.allowJpeg != oldOpts.allowJpeg ||
-        opts.quality != oldOpts.quality ||
-        opts.compressLevel != oldOpts.compressLevel ||
-        opts.subsampling != oldOpts.subsampling)
+    if (params.jpeg.get() != oldParams.jpeg.get() ||
+        params.quality.get() != oldParams.quality.get() ||
+        params.compressLevel.get() != oldParams.compressLevel.get() ||
+        params.subsampling.get() != oldParams.subsampling.get())
       encodingChange = true;
 
-    if (opts.viewOnly != oldOpts.viewOnly && opts.showToolbar &&
-        !opts.fullScreen)
+    if (params.viewOnly.get() != oldParams.viewOnly.get() &&
+        params.toolbar.get() && !params.fullScreen.get())
       recreate = true;
 
     if (state() != RFBSTATE_NORMAL)
-      opts.showToolbar = opts.showToolbar && !benchmark;
+      params.toolbar.set(params.toolbar.get() && !benchmark);
 
-    if (opts.showToolbar != oldOpts.showToolbar && !opts.fullScreen)
+    if (params.toolbar.get() != oldParams.toolbar.get() &&
+        !params.fullScreen.get())
       recreate = true;
 
-    if (desktop != null && opts.scalingFactor != oldOpts.scalingFactor) {
+    if (desktop != null && params.scale.get() != oldParams.scale.get()) {
       deleteRestore = true;
       savedState = -1;
       savedRect = new Rectangle(-1, -1, 0, 0);
       // Ideally we could recreate the viewport on all platforms, but due to a
       // Java bug, doing so on macOS causes the viewer to exit full-screen
       // mode.
-      if (!viewport.lionFSSupported() || !opts.fullScreen)
+      if (!viewport.lionFSSupported() || !params.fullScreen.get())
         recreate = true;
       else
         reconfigure = true;
     }
 
     if (desktop != null &&
-        !opts.desktopSize.equalsIgnoreID(oldOpts.desktopSize)) {
+        !params.desktopSize.equalsIgnoreID(oldParams.desktopSize)) {
       deleteRestore = true;
       savedState = -1;
       savedRect = new Rectangle(-1, -1, 0, 0);
-      if (opts.desktopSize.mode != Options.SIZE_SERVER) {
-        if (!viewport.lionFSSupported() || !opts.fullScreen)
+      if (params.desktopSize.getMode() != DesktopSize.SERVER) {
+        if (!viewport.lionFSSupported() || !params.fullScreen.get())
           recreate = true;
         else
           reconfigure = true;
@@ -1642,32 +1816,32 @@ public class CConn extends CConnection implements UserPasswdGetter,
       }
     }
 
-    if (desktop != null && opts.span != oldOpts.span) {
+    if (desktop != null && params.span.get() != oldParams.span.get()) {
       deleteRestore = true;
       savedState = -1;
       savedRect = new Rectangle(-1, -1, 0, 0);
-      if (!viewport.lionFSSupported() || !opts.fullScreen)
+      if (!viewport.lionFSSupported() || !params.fullScreen.get())
         recreate = true;
       else
         reconfigure = true;
     }
 
-    clipboardDialog.setSendingEnabled(opts.sendClipboard);
-    menu.updateMenuKey(opts.menuKeyCode);
+    clipboardDialog.setSendingEnabled(params.sendClipboard.get());
+    menu.updateMenuKey();
 
     if (Utils.osGrab() && Helper.isAvailable()) {
       boolean isGrabbed = VncViewer.isKeyboardGrabbed(viewport);
       if (viewport != null &&
-          ((opts.grabKeyboard == Options.GRAB_ALWAYS && !isGrabbed) ||
-           (opts.grabKeyboard == Options.GRAB_FS &&
-            opts.fullScreen != isGrabbed))) {
+          ((params.grabKeyboard.get() == GrabParameter.ALWAYS && !isGrabbed) ||
+           (params.grabKeyboard.get() == GrabParameter.FS &&
+            params.fullScreen.get() != isGrabbed))) {
         viewport.grabKeyboardHelper(!isGrabbed);
         selectGrab(!isGrabbed);
       }
     }
 
-    setShared(opts.shared);
-    if (opts.cursorShape != oldOpts.cursorShape) {
+    setShared(params.shared.get());
+    if (params.cursorShape.get() != oldParams.cursorShape.get()) {
       encodingChange = true;
       if (desktop != null)
         desktop.resetLocalCursor();
@@ -1675,25 +1849,25 @@ public class CConn extends CConnection implements UserPasswdGetter,
 
     checkEncodings();
 
-    if (opts.fullScreen != oldOpts.fullScreen) {
-      opts.fullScreen = !opts.fullScreen;
+    if (params.fullScreen.get() != oldParams.fullScreen.get()) {
+      params.fullScreen.set(!params.fullScreen.get());
       toggleFullScreen();
     } else if (recreate)
       recreateViewport();
     else if (reconfigure)
       reconfigureAndRepaintViewport(false);
-    if (opts.showToolbar != oldOpts.showToolbar) {
+    if (params.toolbar.get() != oldParams.toolbar.get()) {
       if (viewport != null)
-        viewport.showToolbar(opts.showToolbar);
-      menu.showToolbar.setSelected(opts.showToolbar);
+        viewport.showToolbar(params.toolbar.get());
+      menu.showToolbar.setSelected(params.toolbar.get());
     }
-    if (opts.viewOnly != oldOpts.viewOnly) {
+    if (params.viewOnly.get() != oldParams.viewOnly.get()) {
       if (viewport != null)
         viewport.updateMacMenuViewOnly();
-      menu.viewOnly.setSelected(opts.viewOnly);
+      menu.viewOnly.setSelected(params.viewOnly.get());
     }
-    if (opts.scalingFactor != oldOpts.scalingFactor ||
-        !opts.desktopSize.equalsIgnoreID(oldOpts.desktopSize)) {
+    if (params.scale.get() != oldParams.scale.get() ||
+        !params.desktopSize.equalsIgnoreID(oldParams.desktopSize)) {
       if (viewport != null)
         viewport.updateMacMenuZoom();
       menu.updateZoom();
@@ -1710,9 +1884,6 @@ public class CConn extends CConnection implements UserPasswdGetter,
       forceNonincremental = true;
       requestNewUpdate();
     }
-
-    opts.save();
-    VncViewer.opts = new Options(opts);
   }
 
   public boolean supportsSetDesktopSize() {
@@ -1721,12 +1892,12 @@ public class CConn extends CConnection implements UserPasswdGetter,
 
   // EDT
   public void zoomIn() {
-    if (opts.desktopSize.mode == Options.SIZE_AUTO ||
-        opts.scalingFactor == Options.SCALE_AUTO ||
-        opts.scalingFactor == Options.SCALE_FIXEDRATIO)
+    if (params.desktopSize.getMode() == DesktopSize.AUTO ||
+        params.scale.get() == ScaleParameter.AUTO ||
+        params.scale.get() == ScaleParameter.FIXEDRATIO)
       return;
 
-    int sf = opts.scalingFactor;
+    int sf = params.scale.get();
     if (sf < 100)
       sf = ((sf / 10) + 1) * 10;
     else if (sf >= 100 && sf <= 200)
@@ -1734,11 +1905,11 @@ public class CConn extends CConnection implements UserPasswdGetter,
     else
       sf = ((sf / 50) + 1) * 50;
     if (sf > 400) sf = 400;
-    opts.scalingFactor = sf;
+    params.scale.set(sf);
 
     savedState = -1;
     savedRect = new Rectangle(-1, -1, 0, 0);
-    if (!viewport.lionFSSupported() || !opts.fullScreen)
+    if (!viewport.lionFSSupported() || !params.fullScreen.get())
       recreateViewport();
     else
       reconfigureAndRepaintViewport(false);
@@ -1748,12 +1919,12 @@ public class CConn extends CConnection implements UserPasswdGetter,
 
   // EDT
   public void zoomOut() {
-    if (opts.desktopSize.mode == Options.SIZE_AUTO ||
-        opts.scalingFactor == Options.SCALE_AUTO ||
-        opts.scalingFactor == Options.SCALE_FIXEDRATIO)
+    if (params.desktopSize.getMode() == DesktopSize.AUTO ||
+        params.scale.get() == ScaleParameter.AUTO ||
+        params.scale.get() == ScaleParameter.FIXEDRATIO)
       return;
 
-    int sf = opts.scalingFactor;
+    int sf = params.scale.get();
     if (sf <= 100)
       sf = (((sf + 9) / 10) - 1) * 10;
     else if (sf >= 100 && sf <= 200)
@@ -1762,11 +1933,11 @@ public class CConn extends CConnection implements UserPasswdGetter,
       sf = (((sf + 49) / 50) - 1) * 50;
     if (sf < 10) sf = 10;
     if (sf > 400) sf = 400;
-    opts.scalingFactor = sf;
+    params.scale.set(sf);
 
     savedState = -1;
     savedRect = new Rectangle(-1, -1, 0, 0);
-    if (!viewport.lionFSSupported() || !opts.fullScreen)
+    if (!viewport.lionFSSupported() || !params.fullScreen.get())
       recreateViewport();
     else
       reconfigureAndRepaintViewport(false);
@@ -1776,16 +1947,16 @@ public class CConn extends CConnection implements UserPasswdGetter,
 
   // EDT
   public void zoom100() {
-    if (opts.desktopSize.mode == Options.SIZE_AUTO ||
-        opts.scalingFactor == Options.SCALE_AUTO ||
-        opts.scalingFactor == Options.SCALE_FIXEDRATIO)
+    if (params.desktopSize.getMode() == DesktopSize.AUTO ||
+        params.scale.get() == ScaleParameter.AUTO ||
+        params.scale.get() == ScaleParameter.FIXEDRATIO)
       return;
 
-    opts.scalingFactor = 100;
+    params.scale.set(100);
 
     savedState = -1;
     savedRect = new Rectangle(-1, -1, 0, 0);
-    if (!viewport.lionFSSupported() || !opts.fullScreen)
+    if (!viewport.lionFSSupported() || !params.fullScreen.get())
       recreateViewport();
     else
       reconfigureAndRepaintViewport(false);
@@ -1795,31 +1966,31 @@ public class CConn extends CConnection implements UserPasswdGetter,
 
   // EDT
   public void toggleToolbar() {
-    if (opts.fullScreen)
+    if (params.fullScreen.get())
       return;
-    opts.showToolbar = !opts.showToolbar;
+    params.toolbar.set(!params.toolbar.get());
     if (viewport != null) {
       recreateViewport();
-      viewport.showToolbar(opts.showToolbar);
+      viewport.showToolbar(params.toolbar.get());
     }
-    menu.showToolbar.setSelected(opts.showToolbar);
+    menu.showToolbar.setSelected(params.toolbar.get());
   }
 
   // EDT
   public void toggleFullScreen() {
-    opts.fullScreen = !opts.fullScreen;
-    menu.fullScreen.setSelected(opts.fullScreen);
+    params.fullScreen.set(!params.fullScreen.get());
+    menu.fullScreen.setSelected(params.fullScreen.get());
     if (viewport != null)
       recreateViewport(true);
   }
 
   // EDT
   public void toggleViewOnly() {
-    opts.viewOnly = !opts.viewOnly;
-    menu.viewOnly.setSelected(opts.viewOnly);
+    params.viewOnly.set(!params.viewOnly.get());
+    menu.viewOnly.setSelected(params.viewOnly.get());
     if (viewport != null) {
       viewport.updateMacMenuViewOnly();
-      if (opts.showToolbar && !opts.fullScreen)
+      if (params.toolbar.get() && !params.fullScreen.get())
         recreateViewport(true);
     }
   }
@@ -1827,15 +1998,15 @@ public class CConn extends CConnection implements UserPasswdGetter,
   // EDT
   public void resize(int x, int y, int w, int h) {
     if (viewport != null) {
-      if (opts.fullScreen)
+      if (params.fullScreen.get())
         toggleFullScreen();
 
       Dimension vpSize = viewport.getSize();
 
       // If the window size is unchanged, check whether we need to force a
       // desktop resize message to inform the server of a new screen layout
-      if (opts.desktopSize.mode == Options.SIZE_AUTO && w == vpSize.width &&
-          h == vpSize.height)
+      if (params.desktopSize.getMode() == DesktopSize.AUTO &&
+          w == vpSize.width && h == vpSize.height)
         checkLayout = true;
       viewport.setGeometry(x, y, w, h);
     }
@@ -1851,15 +2022,34 @@ public class CConn extends CConnection implements UserPasswdGetter,
     fc.setSelectedFile(new File("TurboVNC_Screenshot_" +
                        df.format(Calendar.getInstance().getTime()) + ".png"));
     int ret = fc.showSaveDialog(null);
-    if (ret == JFileChooser.APPROVE_OPTION)
-      desktop.screenshot(fc.getSelectedFile());
+    if (ret == JFileChooser.APPROVE_OPTION) {
+      File file = fc.getSelectedFile();
+      if (file.exists()) {
+        JOptionPane pane;
+        Object[] dlgOptions =
+          { UIManager.getString("OptionPane.yesButtonText"),
+            UIManager.getString("OptionPane.noButtonText") };
+        pane = new JOptionPane("Overwrite the existing file?",
+                               JOptionPane.WARNING_MESSAGE,
+                               JOptionPane.YES_NO_OPTION, null, dlgOptions,
+                               dlgOptions[1]);
+        JDialog dlg = pane.createDialog(viewport, "TurboVNC Viewer");
+        dlg.setAlwaysOnTop(true);
+        dlg.setVisible(true);
+        if (pane.getValue() == dlgOptions[1])
+          return;
+      }
+      desktop.screenshot(file);
+    }
   }
 
   public boolean shouldGrab() {
     return Utils.osGrab() &&
-           (opts.grabKeyboard == Options.GRAB_ALWAYS ||
-            (opts.grabKeyboard == Options.GRAB_MANUAL && isGrabSelected()) ||
-            (opts.grabKeyboard == Options.GRAB_FS && opts.fullScreen));
+           (params.grabKeyboard.get() == GrabParameter.ALWAYS ||
+            (params.grabKeyboard.get() == GrabParameter.MANUAL &&
+             isGrabSelected()) ||
+            (params.grabKeyboard.get() == GrabParameter.FS &&
+             params.fullScreen.get()));
   }
 
   public void selectGrab(boolean on) {
@@ -1880,19 +2070,24 @@ public class CConn extends CConnection implements UserPasswdGetter,
       viewport.updateMacMenuProfile();
   }
 
-  // EDT: writeClientCutText() is called from the clipboard dialog.
-  public void writeClientCutText(String str, int len) {
+  // EDT: sendClipboardData() is called from the clipboard dialog.
+  public void sendClipboardData(String str) {
     if (state() != RFBSTATE_NORMAL || shuttingDown || benchmark)
       return;
-    writer().writeClientCutText(str, len);
+    vlog.debug("Sending clipboard data (" + str.length() + " characters)");
+    super.sendClipboardData(str);
   }
 
   // EDT
   public void writeKeyEvent(int keysym, boolean down) {
+    writeKeyEvent(keysym, 0, down);
+  }
+
+  public void writeKeyEvent(int keysym, int rfbKeyCode, boolean down) {
     if (state() != RFBSTATE_NORMAL || shuttingDown || benchmark)
       return;
     try {
-      writer().writeKeyEvent(keysym, down);
+      writer().writeKeyEvent(keysym, rfbKeyCode, down);
     } catch (Exception e) {
       if (!shuttingDown) {
         vlog.error("Error writing key event:");
@@ -1901,28 +2096,33 @@ public class CConn extends CConnection implements UserPasswdGetter,
     }
   }
 
+  boolean isKeyPressed(int keysym) {
+    return (pressedVKeys.containsValue(keysym) ||
+            pressedRFBKeys.containsValue(keysym));
+  }
+
   // KeyEvent.getKeyModifiersText() is unfortunately broken on some platforms.
   String getKeyModifiersText() {
     String str = "";
-    if (pressedKeys.containsValue(Keysyms.SHIFT_L))
+    if (isKeyPressed(Keysyms.SHIFT_L))
       str += " LShift";
-    if (pressedKeys.containsValue(Keysyms.SHIFT_R))
+    if (isKeyPressed(Keysyms.SHIFT_R))
       str += " RShift";
-    if (pressedKeys.containsValue(Keysyms.CONTROL_L))
+    if (isKeyPressed(Keysyms.CONTROL_L))
       str += " LCtrl";
-    if (pressedKeys.containsValue(Keysyms.CONTROL_R))
+    if (isKeyPressed(Keysyms.CONTROL_R))
       str += " RCtrl";
-    if (pressedKeys.containsValue(Keysyms.ALT_L))
+    if (isKeyPressed(Keysyms.ALT_L))
       str += " LAlt";
-    if (pressedKeys.containsValue(Keysyms.ALT_R))
+    if (isKeyPressed(Keysyms.ALT_R))
       str += " RAlt";
-    if (pressedKeys.containsValue(Keysyms.META_L))
+    if (isKeyPressed(Keysyms.META_L))
       str += " LMeta";
-    if (pressedKeys.containsValue(Keysyms.META_R))
+    if (isKeyPressed(Keysyms.META_R))
       str += " RMeta";
-    if (pressedKeys.containsValue(Keysyms.SUPER_L))
+    if (isKeyPressed(Keysyms.SUPER_L))
       str += " LSuper";
-    if (pressedKeys.containsValue(Keysyms.SUPER_R))
+    if (isKeyPressed(Keysyms.SUPER_R))
       str += " RSuper";
     return str;
   }
@@ -1938,9 +2138,144 @@ public class CConn extends CConnection implements UserPasswdGetter,
     }
   }
 
+  // Convert scan codes or X11 keycodes into RFB keycodes
+  // (refer to https://www.win.tue.nl/~aeb/linux/kbd/scancodes-1.html and
+  // https://github.com/rfbproto/rfbproto/blob/master/rfbproto.rst, under the
+  // "QEMU Extended Key Event Message" section.)
+  int getRFBKeyCode(KeyEvent ev) {
+    if (!cp.supportsQEMUExtKeyEvent || cp.ledState == RFB.LED_UNKNOWN)
+      return 0;
+
+    int rfbKeyCode = 0;
+    int vKeyCode = ev.getKeyCode();
+    int location = ev.getKeyLocation();
+    String[] tokens = ev.paramString().split(",");
+    if (tokens == null) return 0;
+
+    if (Utils.isWindows()) {
+      // On Windows, the "scancode" field in the parameter string contains the
+      // scan code from the WM_KEYDOWN/WM_KEYUP/WM_SYSKEYDOWN/WM_SYSKEYUP
+      // message.  For most keys, this is the same as the RFB keycode.
+      for (String token : tokens) {
+        if (token.startsWith("scancode=")) {
+          String[] tokens2 = token.split("=");
+          if (tokens2.length > 1) {
+            rfbKeyCode = Integer.parseInt(tokens2[1]);
+            break;
+          }
+        }
+      }
+      if (rfbKeyCode != 0 && (rfbKeyCode & ~0x7f) == 0) {
+        // These scan codes should be escaped, but Windows reports them in
+        // unescaped form, so we need to add 0x80, per the QEMU Extended Key
+        // Event spec.
+        if ((rfbKeyCode == 0x32 && vKeyCode == 0) ||  // Web/Home
+            (rfbKeyCode == 0x65 && vKeyCode == 0) ||  // Search
+            (rfbKeyCode == 0x6c && vKeyCode == 0) ||  // Mail
+            (rfbKeyCode == 0x20 && vKeyCode == 0) ||  // Mute
+            (rfbKeyCode == 0x2e && vKeyCode == 0) ||  // Volume Down
+            (rfbKeyCode == 0x30 && vKeyCode == 0) ||  // Volume Up
+            (rfbKeyCode == 0x22 && vKeyCode == 0) ||  // Play/Pause
+            (rfbKeyCode == 0x21 && vKeyCode == 0) ||  // Calculator
+            rfbKeyCode == 0x5b ||  // Windows
+            rfbKeyCode == 0x5d ||  // Menu
+            (rfbKeyCode == 0x38 &&
+             location == KeyEvent.KEY_LOCATION_RIGHT) ||  // Right Alt
+            (rfbKeyCode == 0x1d &&
+             location == KeyEvent.KEY_LOCATION_RIGHT) ||  // Right Ctrl
+            (rfbKeyCode == 0x52 &&
+             location != KeyEvent.KEY_LOCATION_NUMPAD) ||  // Insert
+            (rfbKeyCode == 0x47 &&
+             location != KeyEvent.KEY_LOCATION_NUMPAD) ||  // Home
+            (rfbKeyCode == 0x49 &&
+             location != KeyEvent.KEY_LOCATION_NUMPAD) ||  // Page Up
+            (rfbKeyCode == 0x53 &&
+             location != KeyEvent.KEY_LOCATION_NUMPAD) ||  // Delete
+            (rfbKeyCode == 0x4f &&
+             location != KeyEvent.KEY_LOCATION_NUMPAD) ||  // End
+            (rfbKeyCode == 0x51 &&
+             location != KeyEvent.KEY_LOCATION_NUMPAD) ||  // Page Down
+            (rfbKeyCode == 0x48 &&
+             location != KeyEvent.KEY_LOCATION_NUMPAD) ||  // Up
+            (rfbKeyCode == 0x4b &&
+             location != KeyEvent.KEY_LOCATION_NUMPAD) ||  // Left
+            (rfbKeyCode == 0x50 &&
+             location != KeyEvent.KEY_LOCATION_NUMPAD) ||  // Down
+            (rfbKeyCode == 0x4d &&
+             location != KeyEvent.KEY_LOCATION_NUMPAD) ||  // Right
+            (rfbKeyCode == 0x35 &&
+             location == KeyEvent.KEY_LOCATION_NUMPAD) ||  // KP Divide
+            (rfbKeyCode == 0x1c &&
+             location == KeyEvent.KEY_LOCATION_NUMPAD) ||  // KP Enter
+            (rfbKeyCode == 0x6a && vKeyCode == 0) ||  // Back
+            (rfbKeyCode == 0x69 && vKeyCode == 0))    // Forward
+          rfbKeyCode |= 0x80;
+        // Java on Windows reports the scan code for the Left Shift key when
+        // the Right Shift key is pressed or released.
+        else if (rfbKeyCode == 0x2a &&
+                 location == KeyEvent.KEY_LOCATION_RIGHT)
+          rfbKeyCode = 0x36;
+
+        return rfbKeyCode;
+      }
+    } else if (Utils.isX11()) {
+      // On Un*x, the "rawCode" field in the parameter string contains the X11
+      // keycode.  For most keys, this is the same as the RFB keycode + 8.
+      for (String token : tokens) {
+        if (token.startsWith("rawCode=")) {
+          String[] tokens2 = token.split("=");
+          if (tokens2.length > 1) {
+            rfbKeyCode = Integer.parseInt(tokens2[1]);
+            break;
+          }
+        }
+      }
+      if (rfbKeyCode != 0) {
+        if (viewport.getXkbRules() == 0 &&
+            rfbKeyCode < Keycodes.XORG_BASE_TO_RFB.length)
+          return Keycodes.XORG_BASE_TO_RFB[rfbKeyCode];
+        else if (viewport.getXkbRules() == 1 &&
+                 rfbKeyCode < Keycodes.XORG_EVDEV_TO_RFB.length)
+          return Keycodes.XORG_EVDEV_TO_RFB[rfbKeyCode];
+      }
+    }
+
+    return 0;
+  }
+
+  public void writeKeyPress(int keysym, int rfbKeyCode, String debugStr) {
+    if (shuttingDown || benchmark || rfbKeyCode <= 0)
+      return;
+
+    if (keysym < 0) keysym = 0;
+    if (keysym > 0)
+      debugStr += String.format(" => 0x%04x", keysym);
+    vlog.debug(debugStr);
+    pressedRFBKeys.put(rfbKeyCode, keysym);
+    writeKeyEvent(keysym, rfbKeyCode, true);
+  }
+
+  public void writeKeyRelease(int rfbKeyCode, String debugStr) {
+    if (shuttingDown || benchmark || rfbKeyCode <= 0)
+      return;
+
+    Integer sym = pressedRFBKeys.get(rfbKeyCode);
+
+    if (sym == null) {
+      debugStr += " UNEXPECTED/IGNORED";
+      vlog.debug(debugStr);
+      return;
+    }
+
+    writeKeyEvent(sym, rfbKeyCode, false);
+    pressedRFBKeys.remove(rfbKeyCode);
+    debugStr += String.format(" => 0x%04x", sym);
+    vlog.debug(debugStr);
+  }
+
   // EDT
   public void writeKeyEvent(KeyEvent ev) {
-    int keysym = -1, keycode, key, location;
+    int keysym = -1, vKeyCode, keyChar, location, rfbKeyCode;
     boolean winAltGr = false;
     String debugStr;
 
@@ -1949,36 +2284,57 @@ public class CConn extends CConnection implements UserPasswdGetter,
 
     boolean down = (ev.getID() == KeyEvent.KEY_PRESSED);
 
-    keycode = ev.getKeyCode();
-    key = ev.getKeyChar();
+    vKeyCode = ev.getKeyCode();
+    keyChar = ev.getKeyChar();
     location = ev.getKeyLocation();
+    rfbKeyCode = getRFBKeyCode(ev);
 
-    debugStr = ((ev.isActionKey() ? "action " : "") + "key " +
-                  (down ? "PRESS" : "release") +
-                ", code " + KeyEvent.getKeyText(keycode) +
-                  " (" + keycode + ")" +
-                ", loc " + getLocationText(location) +
-                ", char " +
-                  (key >= 32 && key <= 126 ? "'" + (char)key + "'" : key) +
-                getKeyModifiersText() + (ev.isAltGraphDown() ? " AltGr" : ""));
+    debugStr = (ev.isActionKey() ? "action " : "") + "key " +
+                 (down ? "PRESS" : "release") +
+               ", code " + KeyEvent.getKeyText(vKeyCode) +
+                 " (" + vKeyCode + ")" +
+               ", loc " + getLocationText(location);
+    if (keyChar != KeyEvent.CHAR_UNDEFINED)
+      debugStr += ", char " +
+                  (keyChar >= 32 && keyChar <= 126 ?
+                   "'" + (char)keyChar + "'" : keyChar);
+    if (rfbKeyCode != 0)
+      debugStr += ", RFB keycode 0x" + Integer.toHexString(rfbKeyCode);
+    debugStr += getKeyModifiersText() + (ev.isAltGraphDown() ? " AltGr" : "");
 
-    // If neither the key code nor key char is defined, then there's really
-    // nothing we can do with this.  The fn key on OS X fires events like this
-    // when pressed but does not fire a corresponding release event.
-    if (keycode == 0 && ev.getKeyChar() == KeyEvent.CHAR_UNDEFINED) {
+    // If neither the virtual key code nor key char is defined, then there's
+    // really nothing we can do with this.  The fn key on OS X fires events
+    // like this when pressed but does not fire a corresponding release event.
+    if (vKeyCode == 0 && ev.getKeyChar() == KeyEvent.CHAR_UNDEFINED &&
+        rfbKeyCode == 0) {
       debugStr += " IGNORED";
       vlog.debug(debugStr);
       return;
     }
 
     if (!down) {
-      Integer hashedKey = keycode;
+      // If a key release occurs in the middle of a potential Windows AltGr key
+      // sequence, then it must not be an AltGr key sequence.  Cancel the timer
+      // and send the deferred Left Ctrl key press event.
+      if (altGrArmed) {
+        altGrArmed = false;
+        if (timer != null) timer.stop();
+        pressedRFBKeys.put(0x1d, Keysyms.CONTROL_L);
+        writeKeyEvent(Keysyms.CONTROL_L, 0x1d, true);
+      }
+
+      if (rfbKeyCode != 0) {
+        writeKeyRelease(rfbKeyCode, debugStr);
+        return;
+      }
+
+      Integer hashedKey = vKeyCode;
       if (Utils.isMac()) {
         if (hashedKey == KeyEvent.VK_ALT_GRAPH)
           hashedKey = KeyEvent.VK_ALT;
       } else
         hashedKey |= (location << 16);
-      Integer sym = pressedKeys.get(hashedKey);
+      Integer sym = pressedVKeys.get(hashedKey);
 
       if (sym == null) {
         // Note that dead keys will raise this sort of error falsely
@@ -1994,30 +2350,46 @@ public class CConn extends CConnection implements UserPasswdGetter,
       // the pressed keys hash, we release both of them.
       if (Utils.isWindows()) {
         if (sym == Keysyms.SHIFT_R &&
-            pressedKeys.containsValue(Keysyms.SHIFT_L)) {
+            pressedVKeys.containsValue(Keysyms.SHIFT_L)) {
           writeKeyEvent(Keysyms.SHIFT_L, down);
-          pressedKeys.remove(Keysyms.SHIFT_L);
+          pressedVKeys.remove(Keysyms.SHIFT_L);
         }
         if (sym == Keysyms.SHIFT_L &&
-            pressedKeys.containsValue(Keysyms.SHIFT_R)) {
+            pressedVKeys.containsValue(Keysyms.SHIFT_R)) {
           writeKeyEvent(Keysyms.SHIFT_R, down);
-          pressedKeys.remove(Keysyms.SHIFT_R);
+          pressedVKeys.remove(Keysyms.SHIFT_R);
         }
       }
 
       writeKeyEvent(sym, false);
-      pressedKeys.remove(hashedKey);
+      pressedVKeys.remove(hashedKey);
       debugStr += String.format(" => 0x%04x", sym);
       vlog.debug(debugStr);
       return;
     }
 
-    if (!ev.isActionKey()) {
-      if (keycode >= KeyEvent.VK_0 && keycode <= KeyEvent.VK_9 &&
-        location == KeyEvent.KEY_LOCATION_NUMPAD)
-        keysym = Keysyms.KP_0 + keycode - KeyEvent.VK_0;
+    // Windows represents AltGr with a Left Ctrl + Right Alt key sequence, but
+    // the TurboVNC Server expects AltGr to be a single keystroke.  Thus, if we
+    // see a Left Ctrl key press, we defer sending that event to the server.
+    // If a Left Ctrl key press is followed quickly (within 50 ms) by a Right
+    // Alt key press, then we send only the Right Alt key press.
+    if (altGrArmed) {
+      altGrArmed = false;
+      if (timer != null) timer.stop();
+      if (rfbKeyCode != 0xb8 || Utils.getTime() - altGrArmedTime >= 0.05) {
+        // Not an AltGr key sequence, so send the deferred Left Ctrl key press
+        // event.
+        pressedRFBKeys.put(0x1d, Keysyms.CONTROL_L);
+        writeKeyEvent(Keysyms.CONTROL_L, 0x1d, true);
+      }
+    }
 
-      switch (keycode) {
+    if (!ev.isActionKey()) {
+      if (vKeyCode >= KeyEvent.VK_0 && vKeyCode <= KeyEvent.VK_9 &&
+        location == KeyEvent.KEY_LOCATION_NUMPAD)
+        keysym = Keysyms.KP_0 + vKeyCode - KeyEvent.VK_0;
+
+      switch (vKeyCode) {
         case KeyEvent.VK_BACK_SPACE:  keysym = Keysyms.BACKSPACE;  break;
         case KeyEvent.VK_TAB:         keysym = Keysyms.TAB;  break;
         case KeyEvent.VK_ENTER:
@@ -2041,7 +2413,7 @@ public class CConn extends CConnection implements UserPasswdGetter,
         case KeyEvent.VK_DECIMAL:
           // Use XK_KP_Separator instead of XK_KP_Decimal if the current key
           // map uses a comma rather than period as a decimal symbol.
-          if (key == ',')
+          if (keyChar == ',')
             keysym = Keysyms.KP_SEPARATOR;
           else
             keysym = Keysyms.KP_DECIMAL;
@@ -2102,53 +2474,52 @@ public class CConn extends CConnection implements UserPasswdGetter,
           // modifiers (and any other Ctrl and Alt modifiers that are pressed),
           // then send the key event for the modified key, then send fake key
           // press events for the same modifiers.
-          if (pressedKeys.containsValue(Keysyms.ALT_R) &&
-              pressedKeys.containsValue(Keysyms.CONTROL_L) &&
+          if (isKeyPressed(Keysyms.ALT_R) && isKeyPressed(Keysyms.CONTROL_L) &&
               Utils.isWindows()) {
             winAltGr = true;
           } else if (ev.isControlDown()) {
             // For CTRL-<letter>, CTRL is sent separately, so just send
             // <letter>.
-            if ((key >= 1 && key <= 26 && !ev.isShiftDown()) ||
+            if ((keyChar >= 1 && keyChar <= 26 && !ev.isShiftDown()) ||
                 // CTRL-{, CTRL-|, CTRL-} also map to ASCII 96-127
-                (key >= 27 && key <= 29 && ev.isShiftDown()))
-              key += 96;
+                (keyChar >= 27 && keyChar <= 29 && ev.isShiftDown()))
+              keyChar += 96;
             // For CTRL-SHIFT-<letter>, send capital <letter> to emulate the
             // behavior of Linux.  For CTRL-@, send @.  For CTRL-_, send _.
             // For CTRL-^, send ^.
-            else if (key < 32)
-              key += 64;
+            else if (keyChar < 32)
+              keyChar += 64;
             // Windows and Mac sometimes return CHAR_UNDEFINED with CTRL-SHIFT
             // combinations.
-            else if (key == KeyEvent.CHAR_UNDEFINED) {
+            else if (keyChar == KeyEvent.CHAR_UNDEFINED) {
               // CTRL-SHIFT-Minus should generate an underscore key character
               // in almost all keyboard layouts.  Emacs, in particular, uses
               // CTRL-SHIFT-Underscore for its undo function.
-              if (keycode == KeyEvent.VK_MINUS && ev.isShiftDown())
-                key = '_';
-              // The best we can do for other keys is to send the key code if
-              // it is a valid ASCII symbol.
-              else if (keycode >= 0 && keycode <= 127)
-                key = keycode;
+              if (vKeyCode == KeyEvent.VK_MINUS && ev.isShiftDown())
+                keyChar = '_';
+              // The best we can do for other keys is to send the virtual key
+              // code if it is a valid ASCII symbol.
+              else if (vKeyCode >= 0 && vKeyCode <= 127)
+                keyChar = vKeyCode;
             }
-          } else if (pressedKeys.containsValue(Keysyms.ALT_L) &&
-                     Utils.isMac() && key > 127) {
+          } else if (isKeyPressed(Keysyms.ALT_L) &&
+                     Utils.isMac() && keyChar > 127) {
             // Un*x and Windows servers expect that, if Alt + an ASCII key is
             // pressed, the key event for the ASCII key will be the same as if
             // Alt had not been pressed.  On OS X, however, the Alt/Option keys
             // act like AltGr keys, so if Alt + an ASCII key is pressed, the
-            // key code is the ASCII key symbol, but the key char is the code
-            // for the alternate graphics symbol.
-            if (keycode >= 65 && keycode <= 90 &&
-                !pressedKeys.containsValue(Keysyms.SHIFT_L) &&
-                !pressedKeys.containsValue(Keysyms.SHIFT_R))
-              key = keycode + 32;
-            else if (keycode == KeyEvent.VK_QUOTE)
-              key = '\'';
-            else if (keycode >= 32 && keycode <= 126)
-              key = keycode;
+            // virtual key code is the ASCII key symbol, but the key char is
+            // the code for the alternate graphics symbol.
+            if (vKeyCode >= 65 && vKeyCode <= 90 &&
+                !isKeyPressed(Keysyms.SHIFT_L) &&
+                !isKeyPressed(Keysyms.SHIFT_R))
+              keyChar = vKeyCode + 32;
+            else if (vKeyCode == KeyEvent.VK_QUOTE)
+              keyChar = '\'';
+            else if (vKeyCode >= 32 && vKeyCode <= 126)
+              keyChar = vKeyCode;
           }
-          switch (keycode) {
+          switch (vKeyCode) {
             // NOTE: For keyboard layouts that produce a different symbol when
             // AltGr+{a dead key} is pressed, Java tends to send us the key
             // code for the dead key.  It is difficult to distinguish those key
@@ -2173,7 +2544,7 @@ public class CConn extends CConnection implements UserPasswdGetter,
               break;
             case KeyEvent.VK_DEAD_ACUTE:
               if (location != KeyEvent.KEY_LOCATION_UNKNOWN &&
-                  (key == '\'' || key == 180 || key > 255))
+                  (keyChar == '\'' || keyChar == 180 || keyChar > 255))
                 keysym = Keysyms.DEAD_ACUTE;
               break;
             case KeyEvent.VK_DEAD_BREVE:
@@ -2186,17 +2557,17 @@ public class CConn extends CConnection implements UserPasswdGetter,
               break;
             case KeyEvent.VK_DEAD_CEDILLA:
               if (location != KeyEvent.KEY_LOCATION_UNKNOWN &&
-                  (key == 184 || key > 255))
+                  (keyChar == 184 || keyChar > 255))
                 keysym = Keysyms.DEAD_CEDILLA;
               break;
             case KeyEvent.VK_DEAD_CIRCUMFLEX:
               if (location != KeyEvent.KEY_LOCATION_UNKNOWN &&
-                  (key == '^' || key > 255))
+                  (keyChar == '^' || keyChar > 255))
                 keysym = Keysyms.DEAD_CIRCUMFLEX;
               break;
             case KeyEvent.VK_DEAD_DIAERESIS:
               if (location != KeyEvent.KEY_LOCATION_UNKNOWN &&
-                  (key == '\"' || key == 168 || key > 255))
+                  (keyChar == '\"' || keyChar == 168 || keyChar > 255))
                 keysym = Keysyms.DEAD_DIAERESIS;
               break;
             case KeyEvent.VK_DEAD_DOUBLEACUTE:
@@ -2205,7 +2576,7 @@ public class CConn extends CConnection implements UserPasswdGetter,
               break;
             case KeyEvent.VK_DEAD_GRAVE:
               if (location != KeyEvent.KEY_LOCATION_UNKNOWN &&
-                  (key == '`' || key > 255))
+                  (keyChar == '`' || keyChar > 255))
                 keysym = Keysyms.DEAD_GRAVE;
               break;
             case KeyEvent.VK_DEAD_IOTA:
@@ -2226,7 +2597,7 @@ public class CConn extends CConnection implements UserPasswdGetter,
               break;
             case KeyEvent.VK_DEAD_TILDE:
               if (location != KeyEvent.KEY_LOCATION_UNKNOWN &&
-                  (key == '~' || key > 255))
+                  (keyChar == '~' || keyChar > 255))
                 keysym = Keysyms.DEAD_TILDE;
               break;
             case KeyEvent.VK_DEAD_VOICED_SOUND:
@@ -2235,16 +2606,18 @@ public class CConn extends CConnection implements UserPasswdGetter,
               break;
           }
           if (keysym == -1)
-            keysym = UnicodeToKeysym.ucs2keysym(key);
+            keysym = UnicodeToKeysym.ucs2keysym(keyChar);
           if (keysym == -1) {
             debugStr += " NO KEYSYM";
-            vlog.debug(debugStr);
-            return;
+            if (rfbKeyCode == 0) {
+              vlog.debug(debugStr);
+              return;
+            }
           }
       }
     } else {
       // KEY_ACTION
-      switch (keycode) {
+      switch (vKeyCode) {
         case KeyEvent.VK_HOME:
           if (location == KeyEvent.KEY_LOCATION_NUMPAD)
             keysym = Keysyms.KP_HOME;
@@ -2344,32 +2717,63 @@ public class CConn extends CConnection implements UserPasswdGetter,
           break;
         default:
           debugStr += " NO KEYSYM";
-          vlog.debug(debugStr);
-          return;
+          if (rfbKeyCode == 0) {
+            vlog.debug(debugStr);
+            return;
+          }
       }
     }
 
+    // Handle AltGr, which Windows represents with a Left Ctrl + Right Alt key
+    // sequence.
+    if (Utils.isWindows() && rfbKeyCode == 0x1d &&
+        keysym == Keysyms.CONTROL_L) {
+      if (timer != null) timer.stop();
+      ActionListener actionListener = new ActionListener() {
+        public void actionPerformed(ActionEvent e) {
+          altGrArmed = false;
+          pressedRFBKeys.put(0x1d, Keysyms.CONTROL_L);
+          writeKeyEvent(Keysyms.CONTROL_L, 0x1d, true);
+        }
+      };
+      timer = new javax.swing.Timer(100, actionListener);
+      timer.setRepeats(false);
+      altGrArmed = true;
+      altGrArmedTime = Utils.getTime();
+      timer.start();
+      debugStr += String.format(" => 0x%04x (Possible AltGr)", keysym);
+      vlog.debug(debugStr);
+      return;
+    }
+
+    if (rfbKeyCode != 0) {
+      writeKeyPress(keysym, rfbKeyCode, debugStr);
+      return;
+    }
+
     if (winAltGr) {
-      if (pressedKeys.containsValue(Keysyms.CONTROL_L)) {
+      if (pressedVKeys.containsValue(Keysyms.CONTROL_L)) {
         vlog.debug("Fake L Ctrl released");
         writeKeyEvent(Keysyms.CONTROL_L, false);
       }
-      if (pressedKeys.containsValue(Keysyms.ALT_L)) {
+      if (pressedVKeys.containsValue(Keysyms.ALT_L)) {
         vlog.debug("Fake L Alt released");
         writeKeyEvent(Keysyms.ALT_L, false);
       }
-      if (pressedKeys.containsValue(Keysyms.CONTROL_R)) {
+      if (pressedVKeys.containsValue(Keysyms.CONTROL_R)) {
         vlog.debug("Fake R Ctrl released");
         writeKeyEvent(Keysyms.CONTROL_R, false);
       }
-      if (pressedKeys.containsValue(Keysyms.ALT_R)) {
+      if (pressedVKeys.containsValue(Keysyms.ALT_R)) {
         vlog.debug("Fake R Alt released");
         writeKeyEvent(Keysyms.ALT_R, false);
       }
     }
-    debugStr += String.format(" => 0x%04x", keysym);
+    if (keysym < 0) keysym = 0;
+    if (keysym > 0)
+      debugStr += String.format(" => 0x%04x", keysym);
     vlog.debug(debugStr);
-    Integer hashedKey = keycode;
+    Integer hashedKey = vKeyCode;
     // On Mac platforms, Java 11 assigns KeyEvent.VK_ALT_GRAPH to the right Alt
     // key, whereas previous versions of Java assigned KeyEvent.VK_ALT to the
     // same key.  However, Java 11 still exhibits the behavior described below
@@ -2379,29 +2783,30 @@ public class CConn extends CConnection implements UserPasswdGetter,
     if (Utils.isMac()) {
       if (hashedKey == KeyEvent.VK_ALT_GRAPH)
         hashedKey = KeyEvent.VK_ALT;
-    // On Mac platforms, modifier key press/release events have a key code of 0
-    // if another location of the same modifier key is already pressed, so for
-    // the purposes of matching key release events to key press events, all
-    // locations of a modifier key have to be treated as if they are the same
-    // key.  On other platforms, we hash both the key code and location.
+    // On Mac platforms, modifier key press/release events have a virtual key
+    // code of 0 if another location of the same modifier key is already
+    // pressed, so for the purposes of matching key release events to key press
+    // events, all locations of a modifier key have to be treated as if they
+    // are the same key.  On other platforms, we hash both the virtual key code
+    // and location.
     } else
       hashedKey |= (location << 16);
-    pressedKeys.put(hashedKey, keysym);
+    pressedVKeys.put(hashedKey, keysym);
     writeKeyEvent(keysym, down);
     if (winAltGr) {
-      if (pressedKeys.containsValue(Keysyms.CONTROL_L)) {
+      if (pressedVKeys.containsValue(Keysyms.CONTROL_L)) {
         vlog.debug("Fake L Ctrl pressed");
         writeKeyEvent(Keysyms.CONTROL_L, true);
       }
-      if (pressedKeys.containsValue(Keysyms.ALT_L)) {
+      if (pressedVKeys.containsValue(Keysyms.ALT_L)) {
         vlog.debug("Fake L Alt pressed");
         writeKeyEvent(Keysyms.ALT_L, true);
       }
-      if (pressedKeys.containsValue(Keysyms.CONTROL_R)) {
+      if (pressedVKeys.containsValue(Keysyms.CONTROL_R)) {
         vlog.debug("Fake R Ctrl pressed");
         writeKeyEvent(Keysyms.CONTROL_R, true);
       }
-      if (pressedKeys.containsValue(Keysyms.ALT_R)) {
+      if (pressedVKeys.containsValue(Keysyms.ALT_R)) {
         vlog.debug("Fake R Alt pressed");
         writeKeyEvent(Keysyms.ALT_R, true);
       }
@@ -2423,11 +2828,20 @@ public class CConn extends CConnection implements UserPasswdGetter,
             buttonMask |= RFB.BUTTON2_MASK;  break;
           case 3:
             buttonMask |= RFB.BUTTON3_MASK;  break;
+          case 4:
+            // X11 uses Buttons 6 and 7 for (respectively) left and right
+            // scroll wheel events, but Java/X11 uses Buttons 4 and 5.
+            if (!Utils.isX11()) return;
+            buttonMask |= RFB.BUTTON6_MASK;  break;
+          case 5:
+            if (!Utils.isX11()) return;
+            buttonMask |= RFB.BUTTON7_MASK;  break;
           default:
             return;
         }
-        vlog.debug("mouse PRESS, button " + ev.getButton() +
-                   ", coords " + ev.getX() + "," + ev.getY());
+        if (ev.getButton() <= 3)
+          vlog.debug("mouse PRESS, button " + ev.getButton() +
+                     ", coords " + ev.getX() + "," + ev.getY());
         break;
       case MouseEvent.MOUSE_RELEASED:
         switch (ev.getButton()) {
@@ -2437,11 +2851,18 @@ public class CConn extends CConnection implements UserPasswdGetter,
             buttonMask &= ~RFB.BUTTON2_MASK;  break;
           case 3:
             buttonMask &= ~RFB.BUTTON3_MASK;  break;
+          case 4:
+            if (!Utils.isX11()) return;
+            buttonMask &= ~RFB.BUTTON6_MASK;  break;
+          case 5:
+            if (!Utils.isX11()) return;
+            buttonMask &= ~RFB.BUTTON7_MASK;  break;
           default:
             return;
         }
-        vlog.debug("mouse release, button " + ev.getButton() +
-                   ", coords " + ev.getX() + "," + ev.getY());
+        if (ev.getButton() <= 3)
+          vlog.debug("mouse release, button " + ev.getButton() +
+                     ", coords " + ev.getX() + "," + ev.getY());
         break;
     }
 
@@ -2476,13 +2897,24 @@ public class CConn extends CConnection implements UserPasswdGetter,
       return;
     int x, y, wheelMask;
     int clicks = ev.getWheelRotation();
-    if (opts.reverseScroll) {
+    if (params.reverseScroll.get()) {
       clicks = -clicks;
     }
+    // On macOS and Windows, horizontal scroll wheel events are simply vertical
+    // scroll wheel events with the Shift key held down.  (The operating system
+    // acts as if the Shift key is held down, but no Shift key press/release
+    // events are actually fired.)
+    boolean isHorizontal =
+      (Utils.isMac() || Utils.isWindows()) && ev.isShiftDown() &&
+      !isKeyPressed(Keysyms.SHIFT_L) && !isKeyPressed(Keysyms.SHIFT_R);
+    // X11 uses Buttons 4, 5, 6, and 7 for (respectively) up, down, left, and
+    // right scroll wheel events.
     if (clicks < 0) {
-      wheelMask = buttonMask | RFB.BUTTON4_MASK;
+      wheelMask = buttonMask |
+                  (isHorizontal ? RFB.BUTTON6_MASK : RFB.BUTTON4_MASK);
     } else {
-      wheelMask = buttonMask | RFB.BUTTON5_MASK;
+      wheelMask = buttonMask |
+                  (isHorizontal ? RFB.BUTTON7_MASK : RFB.BUTTON5_MASK);
     }
 
     if (cp.width != desktop.scaledWidth ||
@@ -2516,12 +2948,18 @@ public class CConn extends CConnection implements UserPasswdGetter,
 
   // EDT
   synchronized void releasePressedKeys() {
-    for (Map.Entry<Integer, Integer> entry : pressedKeys.entrySet()) {
+    for (Map.Entry<Integer, Integer> entry : pressedVKeys.entrySet()) {
       vlog.debug(String.format("Lost focus.  Releasing key symbol 0x%04x",
                  entry.getValue()));
       writeKeyEvent(entry.getValue(), false);
     }
-    pressedKeys.clear();
+    pressedVKeys.clear();
+    for (Map.Entry<Integer, Integer> entry : pressedRFBKeys.entrySet()) {
+      vlog.debug(String.format("Lost focus.  Releasing key symbol 0x%04x",
+                 entry.getValue()));
+      writeKeyEvent(entry.getValue(), entry.getKey(), false);
+    }
+    pressedRFBKeys.clear();
   }
 
 
@@ -2533,7 +2971,7 @@ public class CConn extends CConnection implements UserPasswdGetter,
     if (encodingChange && (writer() != null)) {
       vlog.info("Requesting " + RFB.encodingName(currentEncoding) +
                 " encoding");
-      writer().writeSetEncodings(currentEncoding, lastServerEncoding, opts);
+      writer().writeSetEncodings(currentEncoding, lastServerEncoding, params);
       encodingChange = false;
       if (viewport != null)
         viewport.updateTitle();
@@ -2582,7 +3020,14 @@ public class CConn extends CConnection implements UserPasswdGetter,
 
   private boolean supportsSyncFence;
 
-  private HashMap<Integer, Integer> pressedKeys;
+  // Hash of Java virtual key codes to X11 keysyms
+  private HashMap<Integer, Integer> pressedVKeys;
+  // Hash of RFB keycodes to X11 keysyms
+  private HashMap<Integer, Integer> pressedRFBKeys;
+  private boolean altGrArmed;
+  private double altGrArmedTime;
+  private javax.swing.Timer timer;
+  private boolean firstLEDState = true;
   Viewport viewport;
   Rectangle oldViewportBounds;
   boolean keyboardGrabbed;

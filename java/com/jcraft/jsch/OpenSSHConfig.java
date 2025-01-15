@@ -1,8 +1,9 @@
 /* -*-mode:java; c-basic-offset:2; indent-tabs-mode:nil -*- */
 /*
 Copyright (c) 2013-2018 ymnk, JCraft,Inc. All rights reserved.
-Copyright (c) 2019 D. R. Commander. All rights reserved.
+Copyright (c) 2019, 2023 D. R. Commander. All rights reserved.
 Copyright (c) 2020-2021 Jeremy Norris. All rights reserved.
+Copyright (c) 2021 Matthias Wiedemann. All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
 modification, are permitted provided that the following conditions are met:
@@ -10,8 +11,8 @@ modification, are permitted provided that the following conditions are met:
   1. Redistributions of source code must retain the above copyright notice,
      this list of conditions and the following disclaimer.
 
-  2. Redistributions in binary form must reproduce the above copyright 
-     notice, this list of conditions and the following disclaimer in 
+  2. Redistributions in binary form must reproduce the above copyright
+     notice, this list of conditions and the following disclaimer in
      the documentation and/or other materials provided with the distribution.
 
   3. The names of the authors may not be used to endorse or promote products
@@ -31,14 +32,17 @@ EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 package com.jcraft.jsch;
 
-import java.io.InputStream;
 import java.io.Reader;
 import java.io.StringReader;
 import java.io.FileReader;
 import java.io.BufferedReader;
 import java.io.IOException;
+import java.util.Arrays;
 import java.util.Hashtable;
+import java.util.List;
 import java.util.Vector;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 /**
  * This class implements ConfigRepository interface, and parses
@@ -63,7 +67,7 @@ import java.util.Vector;
  *   <li>CompressionLevel</li>
  *   <li>ForwardAgent</li>
  *   <li>RequestTTY</li>
- *   <li>ServerAliveInterval</li>  
+ *   <li>ServerAliveInterval</li>
  *   <li>LocalForward</li>
  *   <li>RemoteForward</li>
  *   <li>ClearAllForwardings</li>
@@ -72,6 +76,9 @@ import java.util.Vector;
  * @see ConfigRepository
  */
 public class OpenSSHConfig implements ConfigRepository {
+
+  private static final List<String> keysWithListAdoption = Stream.of("KexAlgorithms", "Ciphers", "HostbasedAcceptedAlgorithms",
+  "HostKeyAlgorithms", "MACs", "PubkeyAcceptedAlgorithms", "PubkeyAcceptedKeyTypes", "CASignatureAlgorithms").map(String::toUpperCase).collect(Collectors.toList());
 
   /**
    * Parses the given string, and returns an instance of ConfigRepository.
@@ -131,13 +138,13 @@ public class OpenSSHConfig implements ConfigRepository {
       if(key_value.length <= 1)
         continue;
 
-      if(key_value[0].equals("Host")){
+      if(key_value[0].equalsIgnoreCase("Host")){
         config.put(host, kv);
         hosts.addElement(host);
         host = key_value[1];
         kv = new Vector();
       }
-      else if(key_value[0].equals("ServerAliveInterval")){
+      else if(key_value[0].equalsIgnoreCase("ServerAliveInterval")){
         int serverAliveInterval = -1;
         try {
           serverAliveInterval = Integer.parseInt(key_value[1]);
@@ -211,6 +218,7 @@ public class OpenSSHConfig implements ConfigRepository {
     }
 
     private String find(String key) {
+      String originalKey=key;
       if(keymap.get(key)!=null) {
         key = (String)keymap.get(key);
       }
@@ -242,6 +250,24 @@ public class OpenSSHConfig implements ConfigRepository {
         }
       }
       */
+
+      if (keysWithListAdoption.contains(key) && value != null && (value.startsWith("+") || value.startsWith("-") || value.startsWith("^"))) {
+
+        String origConfig = JSch.getConfig(originalKey).trim();
+
+        if (value.startsWith("+")) {
+          value=origConfig + "," + value.substring(1);
+        } else if (value.startsWith("-")) {
+          List<String> algList = Arrays.stream(origConfig.split(",")).collect(Collectors.toList());
+          for (String alg : value.substring(1).split(",")) {
+            algList.remove(alg.trim());
+          }
+          value = String.join(",", algList);
+        } else if (value.startsWith("^")) {
+          value = value.substring(1).trim() + "," + origConfig;
+        }
+      }
+
       return value;
     }
 
@@ -261,7 +287,7 @@ public class OpenSSHConfig implements ConfigRepository {
           }
         }
       }
-      String[] result = new String[value.size()]; 
+      String[] result = new String[value.size()];
       value.toArray(result);
       return result;
     }

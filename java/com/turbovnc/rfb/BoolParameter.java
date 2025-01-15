@@ -1,5 +1,6 @@
-/* Copyright (C) 2002-2005 RealVNC Ltd.  All Rights Reserved.
- * Copyright (C) 2012, 2017-2018 D. R. Commander.  All Rights Reserved.
+/* Copyright (C) 2012, 2017-2018, 2022-2023 D. R. Commander.
+ *                                          All Rights Reserved.
+ * Copyright (C) 2002-2005 RealVNC Ltd.  All Rights Reserved.
  *
  * This is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -19,46 +20,62 @@
 
 package com.turbovnc.rfb;
 
-public class BoolParameter extends VoidParameter {
-  public BoolParameter(String name_, String desc_, boolean v) {
-    super(name_, desc_);
-    value = v;
-    defValue = v;
+public final class BoolParameter extends VoidParameter {
+
+  public BoolParameter(String name, Params params, boolean isGUI,
+                       String desc, boolean defValue_) {
+    super(name, params, isGUI, desc);
+    value = defValue = defValue_;
   }
 
-  public boolean setParam(String v) {
-    return setParam(v, false);
+  public boolean set(String str) {
+    return set(str, false, false);
   }
 
-  public synchronized boolean setParam(String v, boolean reverse_) {
-    if (v.equals("1") || v.equalsIgnoreCase("on") ||
-        v.equalsIgnoreCase("true") || v.equalsIgnoreCase("yes"))
-      value = reverse_ ? false : true;
-    else if (v.equals("0") || v.equalsIgnoreCase("off") ||
-             v.equalsIgnoreCase("false") || v.equalsIgnoreCase("no"))
-      value = reverse_ ? true : false;
+  public synchronized boolean set(String str, boolean reverse_,
+                                  boolean commandLine_) {
+    if (str.equals("1") || str.equalsIgnoreCase("on") ||
+        str.equalsIgnoreCase("true") || str.equalsIgnoreCase("yes"))
+      set(reverse_ ? false : true);
+    else if (str.equals("0") || str.equalsIgnoreCase("off") ||
+             str.equalsIgnoreCase("false") || str.equalsIgnoreCase("no"))
+      set(reverse_ ? true : false);
+    else
+      return false;
+    setCommandLine(commandLine_);
+    return true;
+  }
+
+  public synchronized void set(boolean value_) {
+    value = value_;
+    setCommandLine(false);
+  }
+
+  public synchronized void reset() {
+    set(defValue);
+    reverse = false;
+  }
+
+  public synchronized boolean setDefault(String str) {
+    if (str.equals("1") || str.equalsIgnoreCase("on") ||
+        str.equalsIgnoreCase("true") || str.equalsIgnoreCase("yes"))
+      value = defValue = true;
+    else if (str.equals("0") || str.equalsIgnoreCase("off") ||
+             str.equalsIgnoreCase("false") || str.equalsIgnoreCase("no"))
+      value = defValue = false;
     else
       return false;
     return true;
   }
 
-  public boolean setParam() { setParam(true);  return true; }
-  public synchronized void setParam(boolean b) { value = b; }
-
-  public synchronized void reset() {
-    value = defValue;
-    reverse = false;
-  }
-
-  public String getDefaultStr() { return defValue ? "1" : "0"; }
+  public synchronized boolean get() { return value; }
+  public synchronized String getDefaultStr() { return defValue ? "1" : "0"; }
+  public synchronized String getStr() { return Boolean.toString(value); }
   public String getValues() { return "0, 1"; }
   public boolean isBool() { return true; }
-
-  public final synchronized boolean getValue() { return value; }
 
   @SuppressWarnings("checkstyle:VisibilityModifier")
   public boolean reverse;
 
-  protected boolean value;
-  protected final boolean defValue;
+  private boolean value, defValue;
 }

@@ -18,26 +18,26 @@
  * not EWOULDBLOCK.
  */
 
-/*
- *  Copyright (C) 2012-2020 D. R. Commander.  All Rights Reserved.
- *  Copyright (C) 2011 Gernot Tenchio
- *  Copyright (C) 2011 Joel Martin
- *  Copyright (C) 1999 AT&T Laboratories Cambridge.  All Rights Reserved.
+/* Copyright (C) 2012-2020, 2022, 2024 D. R. Commander.  All Rights Reserved.
+ * Copyright (C) 2021 Steffen Kieß
+ * Copyright (C) 2011 Joel Martin
+ * Copyright (C) 2011 Gernot Tenchio
+ * Copyright (C) 1999 AT&T Laboratories Cambridge.  All Rights Reserved.
  *
- *  This is free software; you can redistribute it and/or modify
- *  it under the terms of the GNU General Public License as published by
- *  the Free Software Foundation; either version 2 of the License, or
- *  (at your option) any later version.
+ * This is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
  *
- *  This software is distributed in the hope that it will be useful,
- *  but WITHOUT ANY WARRANTY; without even the implied warranty of
- *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- *  GNU General Public License for more details.
+ * This software is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  *
- *  You should have received a copy of the GNU General Public License
- *  along with this software; if not, write to the Free Software
- *  Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301,
- *  USA.
+ * You should have received a copy of the GNU General Public License
+ * along with this software; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301,
+ * USA.
  */
 
 #ifdef HAVE_DIX_CONFIG_H
@@ -46,8 +46,10 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <sys/stat.h>
 #include <sys/types.h>
 #include <sys/time.h>
+#include <sys/un.h>
 #include <arpa/inet.h>
 #include <netinet/tcp.h>
 #include <netdb.h>
@@ -73,12 +75,17 @@ int deny_severity = LOG_WARNING;
 int rfbMaxClientWait = DEFAULT_MAX_CLIENT_WAIT;
 
 int rfbPort = 0;
+const char *rfbUDSPath = NULL;
+int rfbUDSMode = 0600;
+Bool rfbUDSCreated = FALSE;
 int rfbListenSock = -1;
 int rfbMaxClientConnections = DEFAULT_MAX_CONNECTIONS;
 
 extern unsigned long long sendBytes;
 
 static void rfbSockNotify(int fd, int ready, void *data);
+static int ListenOnTCPPort(int port);
+static int ListenOnUDS(const char *path, int mode);
 
 
 /*
@@ -122,18 +129,27 @@ void rfbInitSockets(void)
   if (inetdSock != -1) {
     const int one = 1;
 
-    if (fcntl(inetdSock, F_SETFL, O_NONBLOCK) < 0) {
-      rfbLogPerror("fcntl");
-      exit(1);
-    }
+    if (fcntl(inetdSock, F_SETFL, O_NONBLOCK) < 0)
+      FatalError("fcntl() failed: %s", strerror(errno));
 
     if (setsockopt(inetdSock, IPPROTO_TCP, TCP_NODELAY, (char *)&one,
-                   sizeof(one)) < 0) {
-      rfbLogPerror("setsockopt");
-      exit(1);
-    }
+                   sizeof(one)) < 0)
+      FatalError("setsockopt() failed: %s", strerror(errno));
 
     SetNotifyFd(inetdSock, rfbSockNotify, X_NOTIFY_READ, NULL);
+    return;
+  }
+
+  if (rfbUDSPath) {
+    rfbLog("Listening for VNC connections on Unix domain socket\n");
+    rfbLog("  %s (mode %04o)\n", rfbUDSPath, rfbUDSMode);
+
+    if ((rfbListenSock = ListenOnUDS(rfbUDSPath, rfbUDSMode)) < 0)
+      FatalError("ListenOnUDS() failed: %s", strerror(errno));
+
+    rfbUDSCreated = TRUE;
+
+    SetNotifyFd(rfbListenSock, rfbSockNotify, X_NOTIFY_READ, "UNIX");
     return;
   }
 
@@ -142,10 +158,8 @@ void rfbInitSockets(void)
 
   rfbLog("Listening for VNC connections on TCP port %d\n", rfbPort);
 
-  if ((rfbListenSock = ListenOnTCPPort(rfbPort)) < 0) {
-    rfbLogPerror("ListenOnTCPPort");
-    exit(1);
-  }
+  if ((rfbListenSock = ListenOnTCPPort(rfbPort)) < 0)
+    FatalError("ListenOnTCPPort() failed: %s", strerror(errno));
 
   SetNotifyFd(rfbListenSock, rfbSockNotify, X_NOTIFY_READ, NULL);
 }
@@ -157,7 +171,7 @@ static void rfbSockNotify(int fd, int ready, void *data)
   socklen_t addrlen = sizeof(struct sockaddr_storage);
   char addrStr[INET6_ADDRSTRLEN];
   const int one = 1;
-  int sock, numClientConnections = 0;
+  int sock;
   rfbClientPtr cl, nextCl;
 
   if (rfbListenSock != -1 && fd == rfbListenSock) {
@@ -173,11 +187,13 @@ static void rfbSockNotify(int fd, int ready, void *data)
       return;
     }
 
-    if (setsockopt(sock, IPPROTO_TCP, TCP_NODELAY, (char *)&one,
-                   sizeof(one)) < 0) {
-      rfbLogPerror("rfbSockNotify: setsockopt");
-      close(sock);
-      return;
+    if (!data) {
+      if (setsockopt(sock, IPPROTO_TCP, TCP_NODELAY, (char *)&one,
+                     sizeof(one)) < 0) {
+        rfbLogPerror("rfbSockNotify: setsockopt");
+        close(sock);
+        return;
+      }
     }
 
     fprintf(stderr, "\n");
@@ -186,16 +202,14 @@ static void rfbSockNotify(int fd, int ready, void *data)
     if (!hosts_ctl("Xvnc", STRING_UNKNOWN,
                    sockaddr_string(&addr, addrStr, INET6_ADDRSTRLEN),
                    STRING_UNKNOWN)) {
-      rfbLog("Rejected connection from client %s\n",
+      rfbLog("Rejected connection from %s\n",
              sockaddr_string(&addr, addrStr, INET6_ADDRSTRLEN))
       close(sock);
       return;
     }
 #endif
 
-    for (cl = rfbClientHead; cl; cl = cl->next)
-      numClientConnections++;
-    if (numClientConnections >= rfbMaxClientConnections) {
+    if (rfbClientCount() >= rfbMaxClientConnections) {
       rfbClientRec tempCl;
       rfbProtocolVersionMsg pv;
       const char *errMsg = "Connection limit reached";
@@ -219,9 +233,6 @@ static void rfbSockNotify(int fd, int ready, void *data)
       close(sock);
       return;
     }
-
-    rfbLog("Got connection from client %s\n",
-           sockaddr_string(&addr, addrStr, INET6_ADDRSTRLEN));
 
     SetNotifyFd(sock, rfbSockNotify, X_NOTIFY_READ, NULL);
 
@@ -461,7 +472,10 @@ int PeekExactTimeout(rfbClientPtr cl, char *buf, int len, int timeout)
   int n;
   fd_set readfds, exceptfds;
   struct timeval tv;
+  CARD32 start, now;
   int sock = cl->sock;
+
+  start = GetTimeInMillis();
 
   while (len > 0) {
     do {
@@ -508,6 +522,21 @@ int PeekExactTimeout(rfbClientPtr cl, char *buf, int len, int timeout)
         errno = ETIMEDOUT;
         return -1;
       }
+      /* If the client has sent less than len bytes and is waiting for the
+         server before sending more bytes, then we need to enforce the timeout
+         ourselves in order to prevent an infinite loop and subsequent denial
+         of service.  Otherwise recv() will keep returning n < len with errno
+         set to EAGAIN, and select() will keep returning 1, since recv() has
+         not removed any data from the queue.  We need to loop back in order to
+         give the client an opportunity to send more data, but we can't do that
+         forever. */
+      if (errno == EWOULDBLOCK || errno == EAGAIN) {
+        now = GetTimeInMillis();
+        if (now - start >= (CARD32)timeout) {
+          errno = ETIMEDOUT;
+          return -1;
+        }
+      }
     }
   }
   return 1;
@@ -531,7 +560,7 @@ int WriteExact(rfbClientPtr cl, char *buf, int len)
   if (cl->wsctx) {
     char *tmp = NULL;
     if ((len = webSocketsEncode(cl, buf, len, &tmp)) < 0) {
-      rfbLog("WriteExact: WebSockets encode error\n");
+      RFBLOGID("WriteExact: WebSockets encode error\n");
       return -1;
     }
     buf = tmp;
@@ -596,7 +625,7 @@ int WriteExact(rfbClientPtr cl, char *buf, int len)
 }
 
 
-int ListenOnTCPPort(int port)
+static int ListenOnTCPPort(int port)
 {
   rfbSockAddr addr;
   socklen_t addrlen;
@@ -638,6 +667,58 @@ int ListenOnTCPPort(int port)
   if (getnameinfo(&addr.u.sa, addrlen, hostname, NI_MAXHOST, NULL, 0,
                   NI_NUMERICHOST) == 0)
     rfbLog("  Interface %s\n", hostname);
+
+  return sock;
+}
+
+
+static int ListenOnUDS(const char *path, int mode)
+{
+  struct sockaddr_un addr;
+  mode_t saved_umask;
+  int err, result, sock;
+
+  if (strlen(path) >= sizeof(addr.sun_path)) {
+    rfbLog("Unix domain socket path is too long");
+    errno = ENAMETOOLONG;
+    return -1;
+  }
+  memset(&addr, 0, sizeof(addr));
+  addr.sun_family = AF_UNIX;
+  strcpy(addr.sun_path, path);
+
+  /* Remove the socket if it exists and is stale */
+  if (access(path, F_OK) == 0) {
+    /* Check whether the socket is stale by trying to connect to it */
+    if ((sock = socket(AF_UNIX, SOCK_STREAM, 0)) < 0)
+      return -1;
+
+    if (connect(sock, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
+      /* If the socket is stale, delete it */
+      if (errno == ECONNREFUSED)
+        unlink(path);
+    }
+
+    close(sock);
+  }
+
+  if ((sock = socket(AF_UNIX, SOCK_STREAM, 0)) < 0)
+    return -1;
+
+  saved_umask = umask(0777 & ~mode);
+  result = bind(sock, (struct sockaddr *)&addr, sizeof(addr));
+  err = errno;
+  umask(saved_umask);
+  if (result < 0) {
+    close(sock);
+    errno = err;
+    return -1;
+  }
+
+  if (listen(sock, 5) < 0) {
+    close(sock);
+    return -1;
+  }
 
   return sock;
 }

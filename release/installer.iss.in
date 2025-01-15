@@ -45,15 +45,13 @@ Source: "@CMAKE_BINARY_DIR@\vncviewerw.bat"; DestDir: "{app}"; Flags: ignorevers
 Source: "@CMAKE_BINARY_DIR@\vncviewer.bat"; DestDir: "{app}"; Flags: ignoreversion; Components: viewer
 Source: "@CMAKE_SOURCE_DIR@\win\vncviewer\vncviewer.ico"; DestDir: "{app}"; Flags: ignoreversion; Components: viewer
 Source: "@CMAKE_SOURCE_DIR@\java\com\turbovnc\vncviewer\README.md"; DestDir: "{app}\java"; Flags: ignoreversion; Components: viewer
-#ifdef TURBOVNCHELPER
-Source: "@CMAKE_BINARY_DIR@\java\turbovnchelper.dll"; DestDir: "{app}\java"; Flags: ignoreversion; Components: viewer
-#endif
+Source: "@CMAKE_BINARY_DIR@\java\{#BUILDDIR}turbovnchelper.dll"; DestDir: "{app}\java"; Flags: ignoreversion; Components: viewer
 #ifdef INCLUDEJRE
 Source: "@CMAKE_BINARY_DIR@\java\jre\*"; DestDir: "{app}\java\jre"; Flags: ignoreVersion recursesubdirs; Components: viewer
 #endif
 Source: "@CMAKE_SOURCE_DIR@\LICENSE.txt"; DestDir: "{app}"; Flags: ignoreversion
 Source: "@CMAKE_SOURCE_DIR@\ChangeLog.md"; DestDir: "{app}"; Flags: ignoreversion
-Source: "@CMAKE_SOURCE_DIR@\README.txt"; DestDir: "{app}"; Flags: ignoreversion
+Source: "@CMAKE_SOURCE_DIR@\README.md"; DestDir: "{app}"; Flags: ignoreversion
 Source: "@CMAKE_SOURCE_DIR@\win\@CMAKE_PROJECT_NAME@.url"; DestDir: "{app}"; Flags: ignoreversion
 Source: "@CMAKE_SOURCE_DIR@\doc\*.png"; DestDir: "{app}\doc"; Flags: ignoreversion; Components: doc
 Source: "@CMAKE_SOURCE_DIR@\doc\*.html"; DestDir: "{app}\doc"; Flags: ignoreversion; Components: doc
@@ -65,17 +63,22 @@ Source: "@CMAKE_SOURCE_DIR@\doc\*.css"; DestDir: "{app}\doc"; Flags: ignoreversi
 Name: "{group}\@CMAKE_PROJECT_NAME@ Viewer";                      FileName: "{app}\vncviewerw.bat";                                WorkingDir: "{app}";      Flags: "runminimized";  IconFileName: "{app}\vncviewer.ico"
 Name: "{group}\@CMAKE_PROJECT_NAME@ Viewer (Listen Mode)";        FileName: "{app}\vncviewerw.bat";  Parameters: "-listen";        WorkingDir: "{app}";      Flags: "runminimized";  IconFileName: "{app}\vncviewer.ico"
 Name: "{group}\Uninstall @CMAKE_PROJECT_NAME@";                   FileName: "{uninstallexe}";                                      WorkingDir: "{app}";
-Name: "{group}\Documentation\@CMAKE_PROJECT_NAME@ README";        FileName: "write.exe";           Parameters: "README.txt";       WorkingDir: "{app}";      Flags: "useapppaths"
+Name: "{group}\Documentation\@CMAKE_PROJECT_NAME@ README";        FileName: "write.exe";           Parameters: "README.md";       WorkingDir: "{app}";      Flags: "useapppaths"
 Name: "{group}\Documentation\@CMAKE_PROJECT_NAME@ User's Guide";  FileName: "{app}\doc\index.html";                                WorkingDir: "{app}\doc";  Components: doc;
 Name: "{group}\Documentation\Licensing Terms";                    FileName: "write.exe";           Parameters: "LICENSE.txt";      WorkingDir: "{app}\doc";  Flags: "useapppaths"
 Name: "{group}\Documentation\@CMAKE_PROJECT_NAME@ Web Site";      FileName: "{app}\@CMAKE_PROJECT_NAME@.url"
 Name: "{group}\Documentation\@CMAKE_PROJECT_NAME@ Change Log";    FileName: "write.exe";           Parameters: "ChangeLog.md";     WorkingDir: "{app}";      Flags: "useapppaths"
 
 [Tasks]
-Name: associate; Description: "&Associate .vnc files with @CMAKE_PROJECT_NAME@ Viewer"; GroupDescription: "File associations:"; Components: viewer
+Name: associateturbovnc; Description: "&Associate .turbovnc files with @CMAKE_PROJECT_NAME@ Viewer"; GroupDescription: "File associations:"; Components: viewer
+Name: associatevnc; Description: "&Associate .vnc files with @CMAKE_PROJECT_NAME@ Viewer"; GroupDescription: "File associations:"; Components: viewer
 
 [Registry]
-Root: HKCR; Subkey: ".vnc"; ValueType: string; ValueName: ""; ValueData: "VncViewer.Config"; Flags: uninsdeletevalue; Tasks: associate
-Root: HKCR; Subkey: "VncViewer.Config"; ValueType: string; ValueName: ""; ValueData: "VNCviewer Config File"; Flags: uninsdeletekey; Tasks: associate
-Root: HKCR; Subkey: "VncViewer.Config\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: "{app}\vncviewerw.bat,0"; Tasks: associate
-Root: HKCR; Subkey: "VncViewer.Config\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\vncviewerw.bat"" -config ""%1"""; Tasks: associate
+Root: HKCR; Subkey: ".turbovnc"; ValueType: string; ValueName: ""; ValueData: "TurboVNCViewer.Config"; Flags: uninsdeletevalue; Tasks: associateturbovnc
+Root: HKCR; Subkey: "TurboVNCViewer.Config"; ValueType: string; ValueName: ""; ValueData: "TurboVNC Viewer Config File"; Flags: uninsdeletekey; Tasks: associateturbovnc
+Root: HKCR; Subkey: "TurboVNCViewer.Config\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: "{app}\vncviewerw.bat,0"; Tasks: associateturbovnc
+Root: HKCR; Subkey: "TurboVNCViewer.Config\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\vncviewerw.bat"" -config ""%1"""; Tasks: associateturbovnc
+Root: HKCR; Subkey: ".vnc"; ValueType: string; ValueName: ""; ValueData: "VncViewer.Config"; Flags: uninsdeletevalue; Tasks: associatevnc
+Root: HKCR; Subkey: "VncViewer.Config"; ValueType: string; ValueName: ""; ValueData: "VNCviewer Config File"; Flags: uninsdeletekey; Tasks: associatevnc
+Root: HKCR; Subkey: "VncViewer.Config\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: "{app}\vncviewerw.bat,0"; Tasks: associatevnc
+Root: HKCR; Subkey: "VncViewer.Config\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\vncviewerw.bat"" -config ""%1"""; Tasks: associatevnc

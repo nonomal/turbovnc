@@ -1,10 +1,9 @@
-/*
- * Copyright (C) 2004 Red Hat Inc.
- * Copyright (C) 2005 Martin Koegler
+/* Copyright (C) 2012, 2015-2020, 2022 D. R. Commander.  All Rights Reserved.
+ * Copyright (C) 2011-2012, 2015, 2017, 2019 Brian P. Hinz
  * Copyright (C) 2010 m-privacy GmbH
  * Copyright (C) 2010 TigerVNC Team
- * Copyright (C) 2011-2012, 2015, 2017, 2019 Brian P. Hinz
- * Copyright (C) 2012, 2015-2020 D. R. Commander.  All Rights Reserved.
+ * Copyright (C) 2005 Martin Koegler
+ * Copyright (C) 2004 Red Hat Inc.
  *
  * This is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -183,7 +182,7 @@ public class CSecurityTLS extends CSecurity {
     } else {
       try {
         TrustManager[] myTM = new TrustManager[] {
-          new MyX509TrustManager()
+          new MyX509TrustManager(client.params)
         };
         ctx.init(null, myTM, null);
       } catch (java.security.GeneralSecurityException e) {
@@ -237,7 +236,8 @@ public class CSecurityTLS extends CSecurity {
 
     X509TrustManager tm;
 
-    MyX509TrustManager() throws java.security.GeneralSecurityException {
+    MyX509TrustManager(Params params)
+      throws java.security.GeneralSecurityException {
       KeyStore ks = KeyStore.getInstance("JKS");
       CertificateFactory cf = CertificateFactory.getInstance("X.509");
       try {
@@ -249,9 +249,9 @@ public class CSecurityTLS extends CSecurity {
           if (m instanceof X509TrustManager)
             for (X509Certificate c :
                  ((X509TrustManager)m).getAcceptedIssuers())
-              ks.setCertificateEntry(getThumbprint((X509Certificate)c), c);
-        File cacert = new File(Params.x509ca.getValue());
-        vlog.debug("Using X.509 CA certificate " + Params.x509ca.getValue());
+              ks.setCertificateEntry(getThumbprint(c), c);
+        File cacert = new File(params.x509ca.get());
+        vlog.debug("Using X.509 CA certificate " + params.x509ca.get());
         if (cacert.exists() && cacert.canRead()) {
           InputStream caStream = new MyFileInputStream(cacert);
           Collection<? extends Certificate> cacerts =
@@ -261,24 +261,24 @@ public class CSecurityTLS extends CSecurity {
             ks.setCertificateEntry(thumbprint, (X509Certificate)cert);
           }
         }
-        PKIXBuilderParameters params =
+        PKIXBuilderParameters pkixParams =
           new PKIXBuilderParameters(ks, new X509CertSelector());
-        File crlcert = new File(Params.x509crl.getValue());
+        File crlcert = new File(params.x509crl.get());
         if (!crlcert.exists() || !crlcert.canRead()) {
           vlog.debug("Not using X.509 CRL");
-          params.setRevocationEnabled(false);
+          pkixParams.setRevocationEnabled(false);
         } else {
-          vlog.debug("Using X.509 CRL " + Params.x509crl.getValue());
+          vlog.debug("Using X.509 CRL " + params.x509crl.get());
           InputStream crlStream =
-            new FileInputStream(Params.x509crl.getValue());
+            new FileInputStream(params.x509crl.get());
           Collection<? extends CRL> crls = cf.generateCRLs(crlStream);
           CertStoreParameters csp = new CollectionCertStoreParameters(crls);
           CertStore store = CertStore.getInstance("Collection", csp);
-          params.addCertStore(store);
-          params.setRevocationEnabled(true);
+          pkixParams.addCertStore(store);
+          pkixParams.setRevocationEnabled(true);
         }
         tmf = TrustManagerFactory.getInstance("PKIX");
-        tmf.init(new CertPathTrustManagerParameters(params));
+        tmf.init(new CertPathTrustManagerParameters(pkixParams));
         tm = (X509TrustManager)tmf.getTrustManagers()[0];
       } catch (Exception e) {
         SystemException.checkException(e);

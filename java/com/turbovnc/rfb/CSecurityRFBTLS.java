@@ -1,7 +1,7 @@
-/*
- * Copyright (C) 2002-2005 RealVNC Ltd.  All Rights Reserved.
+/* Copyright (C) 2012, 2016-2018, 2021-2022 D. R. Commander.
+ *                                          All Rights Reserved.
  * Copyright (C) 2011 Brian P Hinz
- * Copyright (C) 2012, 2016-2018, 2021 D. R. Commander.  All Rights Reserved.
+ * Copyright (C) 2002-2005 RealVNC Ltd.  All Rights Reserved.
  *
  * This is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -49,7 +49,7 @@ public class CSecurityRFBTLS extends CSecurityTLS {
     int secType = RFB.SECTYPE_INVALID;
 
     List<Integer> secTypes = new ArrayList<Integer>();
-    secTypes = cc.opts.getEnabledExtSecTypes();
+    secTypes = cc.params.secTypes.getEnabledExt();
 
     int nServerSecTypes = is.readU8();
     if (nServerSecTypes == 0)
@@ -66,7 +66,7 @@ public class CSecurityRFBTLS extends CSecurityTLS {
        */
       if (secType == RFB.SECTYPE_INVALID) {
         for (Iterator<Integer> j = secTypes.iterator(); j.hasNext();) {
-          int refType = (Integer)j.next();
+          int refType = j.next();
           if ((refType == RFB.SECTYPE_TLS_VNC &&
                serverSecType == RFB.SECTYPE_VNCAUTH) ||
               (refType == RFB.SECTYPE_TLS_NONE &&
@@ -91,7 +91,7 @@ public class CSecurityRFBTLS extends CSecurityTLS {
     vlog.debug("Choosing TLS security type " +
                RFB.secTypeName(secType) + "(" + secType + ")");
 
-    csecurity = security.getCSecurity(cc.opts, secType);
+    csecurity = security.getCSecurity(cc.params, secType);
     return csecurity.processMsg(cc);
   }
 

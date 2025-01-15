@@ -1,7 +1,7 @@
 /* -*-mode:java; c-basic-offset:2; indent-tabs-mode:nil -*- */
 /*
 Copyright (c) 2002-2018 ymnk, JCraft,Inc. All rights reserved.
-Copyright (c) 2018 D. R. Commander. All rights reserved.
+Copyright (c) 2018, 2023-2024 D. R. Commander. All rights reserved.
 Copyright (c) 2020-2021 Jeremy Norris. All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -10,8 +10,8 @@ modification, are permitted provided that the following conditions are met:
   1. Redistributions of source code must retain the above copyright notice,
      this list of conditions and the following disclaimer.
 
-  2. Redistributions in binary form must reproduce the above copyright 
-     notice, this list of conditions and the following disclaimer in 
+  2. Redistributions in binary form must reproduce the above copyright
+     notice, this list of conditions and the following disclaimer in
      the documentation and/or other materials provided with the distribution.
 
   3. The names of the authors may not be used to endorse or promote products
@@ -34,7 +34,7 @@ package com.jcraft.jsch;
 import java.io.InputStream;
 import java.util.Vector;
 
-public class JSch{
+public final class JSch{
   /**
    * The version number.
    */
@@ -44,7 +44,7 @@ public class JSch{
   static{
     config.put("kex", "ecdh-sha2-nistp256,ecdh-sha2-nistp384,ecdh-sha2-nistp521,diffie-hellman-group14-sha1,diffie-hellman-group-exchange-sha256,diffie-hellman-group-exchange-sha1,diffie-hellman-group1-sha1");
     config.put("server_host_key", "rsa-sha2-256,rsa-sha2-512,ssh-rsa,ssh-dss,ecdsa-sha2-nistp256,ecdsa-sha2-nistp384,ecdsa-sha2-nistp521");
-    config.put("cipher.s2c", 
+    config.put("cipher.s2c",
                "aes128-ctr,aes128-cbc,3des-ctr,3des-cbc,blowfish-cbc,aes192-ctr,aes192-cbc,aes256-ctr,aes256-cbc");
     config.put("cipher.c2s",
                "aes128-ctr,aes128-cbc,3des-ctr,3des-cbc,blowfish-cbc,aes192-ctr,aes192-cbc,aes256-ctr,aes256-cbc");
@@ -59,13 +59,13 @@ public class JSch{
 
     config.put("compression_level", "6");
 
-    config.put("diffie-hellman-group-exchange-sha1", 
+    config.put("diffie-hellman-group-exchange-sha1",
                                 "com.jcraft.jsch.DHGEX");
-    config.put("diffie-hellman-group1-sha1", 
-	                        "com.jcraft.jsch.DHG1");
-    config.put("diffie-hellman-group14-sha1", 
+    config.put("diffie-hellman-group1-sha1",
+                                "com.jcraft.jsch.DHG1");
+    config.put("diffie-hellman-group14-sha1",
                "com.jcraft.jsch.DHG14");    // available since JDK8.
-    config.put("diffie-hellman-group-exchange-sha256", 
+    config.put("diffie-hellman-group-exchange-sha256",
                "com.jcraft.jsch.DHGEX256"); // available since JDK1.4.2.
                                             // On JDK8, 2048bits will be used.
     config.put("ecdsa-sha2-nistp256", "com.jcraft.jsch.jce.SignatureECDSA256");
@@ -132,7 +132,7 @@ public class JSch{
     config.put("StrictHostKeyChecking",  "ask");
     config.put("HashKnownHosts",  "no");
 
-    config.put("PreferredAuthentications", "gssapi-with-mic,publickey,keyboard-interactive,password");
+    config.put("PreferredAuthentications", "publickey,keyboard-interactive,password");
     config.put("PubkeyAcceptedAlgorithms", "rsa-sha2-256,rsa-sha2-512,ssh-rsa,ssh-dss,ecdsa-sha2-nistp256,ecdsa-sha2-nistp384,ecdsa-sha2-nistp521");
 
     config.put("CheckCiphers", "aes256-ctr,aes192-ctr,aes128-ctr,aes256-cbc,aes192-cbc,aes128-cbc,3des-ctr,arcfour,arcfour128,arcfour256");
@@ -197,10 +197,10 @@ public class JSch{
     try{
       String osname=(String)(System.getProperties().get("os.name"));
       if(osname!=null && osname.equals("Mac OS X")){
-        config.put("hmac-sha1",     "com.jcraft.jsch.jcraft.HMACSHA1"); 
-        config.put("hmac-md5",      "com.jcraft.jsch.jcraft.HMACMD5"); 
-        config.put("hmac-md5-96",   "com.jcraft.jsch.jcraft.HMACMD596"); 
-        config.put("hmac-sha1-96",  "com.jcraft.jsch.jcraft.HMACSHA196"); 
+        config.put("hmac-sha1",     "com.jcraft.jsch.jcraft.HMACSHA1");
+        config.put("hmac-md5",      "com.jcraft.jsch.jcraft.HMACMD5");
+        config.put("hmac-md5-96",   "com.jcraft.jsch.jcraft.HMACMD596");
+        config.put("hmac-sha1-96",  "com.jcraft.jsch.jcraft.HMACSHA196");
       }
     }
     catch(Exception e){
@@ -212,7 +212,7 @@ public class JSch{
    * Instantiates the <code>Session</code> object with
    * <code>host</code>.  The user name and port number will be retrieved from
    * ConfigRepository.  If user name is not given,
-   * the system property "user.name" will be referred. 
+   * the system property "user.name" will be referred.
    *
    * @param host hostname
    *
@@ -275,7 +275,7 @@ public class JSch{
     if(host==null){
       throw new JSchException("host must not be null.");
     }
-    Session s = new Session(this, username, host, port); 
+    Session s = new Session(this, username, host, port);
     return s;
   }
 
@@ -318,7 +318,7 @@ public class JSch{
     if(known_hosts==null) known_hosts=new KnownHosts(this);
     if(known_hosts instanceof KnownHosts){
       synchronized(known_hosts){
-	((KnownHosts)known_hosts).setKnownHosts(filename); 
+        ((KnownHosts)known_hosts).setKnownHosts(filename);
       }
     }
   }
@@ -334,11 +334,11 @@ public class JSch{
    *
    * @see com.jcraft.jsch.KnownHosts
    */
-  public void setKnownHosts(InputStream stream) throws JSchException{ 
+  public void setKnownHosts(InputStream stream) throws JSchException{
     if(known_hosts==null) known_hosts=new KnownHosts(this);
     if(known_hosts instanceof KnownHosts){
       synchronized(known_hosts){
-	((KnownHosts)known_hosts).setKnownHosts(stream); 
+        ((KnownHosts)known_hosts).setKnownHosts(stream);
       }
     }
   }
@@ -352,9 +352,9 @@ public class JSch{
    * @see com.jcraft.jsch.HostKeyRepository
    * @see com.jcraft.jsch.KnownHosts
    */
-  public HostKeyRepository getHostKeyRepository(){ 
+  public HostKeyRepository getHostKeyRepository(){
     if(known_hosts==null) known_hosts=new KnownHosts(this);
-    return known_hosts; 
+    return known_hosts;
   }
 
   /**
@@ -460,22 +460,14 @@ public class JSch{
    */
   public void addIdentity(Identity identity, byte[] passphrase) throws JSchException{
     if(passphrase!=null){
-      try{ 
+      try{
         byte[] goo=new byte[passphrase.length];
         System.arraycopy(passphrase, 0, goo, 0, passphrase.length);
         passphrase=goo;
-        identity.setPassphrase(passphrase); 
+        identity.setPassphrase(passphrase);
       }
       finally{
         Util.bzero(passphrase);
-      }
-    }
-    else{
-      /* Don't add private key without a passphrase if another private key with
-         the same fingerprint already exists with a passphrase. */
-      Identity decryptedIdentity=findDecryptedIdentity(identity);
-      if(decryptedIdentity!=null){
-        identity=decryptedIdentity;
       }
     }
 
@@ -504,29 +496,6 @@ public class JSch{
       }
       ((IdentityRepository.Wrapper)identityRepository).add(identity);
     }
-  }
-
-  /**
-   * Checks whether the given private key has already been added with a
-   * passphrase and returns the previously decrypted version of the private key
-   * if so.
-   *
-   * @param identity private key.
-   *
-   * @return the previously decrypted version of the private key, or null if
-   * a decrypted version of the private key cannot be found.
-   */
-  public Identity findDecryptedIdentity(Identity identity){
-    Vector identities = identityRepository.getIdentities();
-    for(int i=0; i<identities.size(); i++){
-      Identity oldIdentity=(Identity)(identities.elementAt(i));
-      String oldFingerPrint=oldIdentity.getFingerPrint();
-      String newFingerPrint=identity.getFingerPrint();
-      if(oldFingerPrint!=null && newFingerPrint!=null &&
-         newFingerPrint.equals(oldFingerPrint) && !oldIdentity.isEncrypted())
-        return oldIdentity;
-    }
-    return null;
   }
 
   /**
@@ -590,13 +559,13 @@ public class JSch{
    * @param key key for the configuration.
    * @return config value
    */
-  public static String getConfig(String key){ 
+  public static String getConfig(String key){
     synchronized(config){
-      if(key.equals("PubkeyAcceptedKeyTypes")){
+      if(key.equalsIgnoreCase("PubkeyAcceptedKeyTypes")){
         key="PubkeyAcceptedAlgorithms";
       }
       return (String)(config.get(key));
-    } 
+    }
   }
 
   /**
@@ -607,9 +576,9 @@ public class JSch{
   public static void setConfig(java.util.Hashtable newconf){
     synchronized(config){
       for(java.util.Enumeration e=newconf.keys() ; e.hasMoreElements() ;) {
-	String newkey=(String)(e.nextElement());
-	String key=(newkey.equals("PubkeyAcceptedKeyTypes") ? "PubkeyAcceptedAlgorithms" : newkey);
-	config.put(key, (String)(newconf.get(newkey)));
+        String newkey=(String)(e.nextElement());
+        String key=(newkey.equalsIgnoreCase("PubkeyAcceptedKeyTypes") ? "PubkeyAcceptedAlgorithms" : newkey);
+        config.put(key, (String)(newconf.get(newkey)));
       }
     }
   }
@@ -621,7 +590,7 @@ public class JSch{
    * @param value value for the configuration
    */
   public static void setConfig(String key, String value){
-    if(key.equals("PubkeyAcceptedKeyTypes")){
+    if(key.equalsIgnoreCase("PubkeyAcceptedKeyTypes")){
       config.put("PubkeyAcceptedAlgorithms", value);
     }
     else{

@@ -1,7 +1,7 @@
-/* Copyright (C) 2002-2005 RealVNC Ltd.  All Rights Reserved.
- * Copyright 2011 Pierre Ossman <ossman@cendio.se> for Cendio AB
- * Copyright (C) 2011-2018, 2020-2022 D. R. Commander.  All Rights Reserved.
+/* Copyright (C) 2011-2018, 2020-2024 D. R. Commander.  All Rights Reserved.
  * Copyright (C) 2011-2013, 2016 Brian P. Hinz
+ * Copyright 2011 Pierre Ossman <ossman@cendio.se> for Cendio AB
+ * Copyright (C) 2002-2005 RealVNC Ltd.  All Rights Reserved.
  *
  * This is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -37,7 +37,7 @@ import com.turbovnc.rdr.*;
 import com.turbovnc.rfb.*;
 import com.turbovnc.network.*;
 
-public class VncViewer implements Runnable, OptionsDialogCallback {
+public final class VncViewer implements Runnable, OptionsDialogCallback {
   static final String PRODUCT_NAME = "TurboVNC Viewer";
   static String copyrightYear = null;
   static String copyright = null;
@@ -108,8 +108,8 @@ public class VncViewer implements Runnable, OptionsDialogCallback {
     return (mask != null ? mask.intValue() : 0);
   }
 
-  // This allows the Mac app to handle .vnc files opened or dragged onto its
-  // icon from the Finder.
+  // This allows the Mac app to handle .turbovnc or .vnc files opened or
+  // dragged onto its icon from the Finder.
 
   static String fileName;
 
@@ -130,12 +130,15 @@ public class VncViewer implements Runnable, OptionsDialogCallback {
             else {
               VncViewer viewer = new VncViewer(new String[]{});
               try {
-                Params.load(fName);
+                if (fName.toLowerCase().endsWith(".vnc"))
+                  viewer.getParams().loadLegacy(fName);
+                else
+                  viewer.getParams().load(fName);
               } catch (Exception e) {
                 viewer.reportException(e);
                 return null;
               }
-              viewer.setGlobalOptions();
+              setGlobalInsets();
               viewer.start();
             }
           }
@@ -174,6 +177,9 @@ public class VncViewer implements Runnable, OptionsDialogCallback {
   }
 
   static void setLookAndFeel() {
+    if (Utils.getBooleanProperty("turbovnc.autotest", false))
+      return;
+
     try {
       if (Utils.isWindows()) {
         String laf = "com.sun.java.swing.plaf.windows.WindowsLookAndFeel";
@@ -248,6 +254,9 @@ public class VncViewer implements Runnable, OptionsDialogCallback {
   }
 
   static void setGlobalInsets() {
+    if (Utils.getBooleanProperty("turbovnc.autotest", false))
+      return;
+
     try {
       // To make a short story long:
       // -- Swing can't determine the proper inset values for a JFrame until it
@@ -295,6 +304,9 @@ public class VncViewer implements Runnable, OptionsDialogCallback {
   }
 
   public static void setBlitterDefaults() {
+    if (Utils.getBooleanProperty("turbovnc.autotest", false))
+      return;
+
     // Java 1.7 and later do not include hardware-accelerated 2D blitting
     // routines on Mac platforms.  They only support OpenGL blitting, and using
     // TYPE_INT_ARGB_PRE BufferedImages with OpenGL blitting is much faster
@@ -344,12 +356,15 @@ public class VncViewer implements Runnable, OptionsDialogCallback {
       synchronized(VncViewer.class) {
         if (fileName != null) {
           try {
-            Params.load(fileName);
+            if (fileName.toLowerCase().endsWith(".vnc"))
+              viewer.getParams().loadLegacy(fileName);
+            else
+              viewer.getParams().load(fileName);
           } catch (Exception e) {
             viewer.reportException(e);
             return;
           }
-          viewer.setGlobalOptions();
+          setGlobalInsets();
           fileName = null;
         }
       }
@@ -375,8 +390,6 @@ public class VncViewer implements Runnable, OptionsDialogCallback {
       if (argv[i].equals("--")) {
         newArgv = new String[i - index];
         System.arraycopy(argv, index, newArgv, 0, i - index);
-        if (index > 0)
-          Params.reset();
         startViewer(newArgv);
         index = i + 1;
       }
@@ -387,137 +400,185 @@ public class VncViewer implements Runnable, OptionsDialogCallback {
         newArgv = new String[i - index];
         System.arraycopy(argv, index, newArgv, 0, i - index);
         argv = newArgv;
-        Params.reset();
       }
       startViewer(argv);
     }
   }
 
   public VncViewer(String[] argv) {
-    UserPreferences.load("global");
+    params = new Params();
+    params.loadDefaults();
 
     setVersion();
 
-    // Override defaults with command-line options
-    for (int i = 0; i < argv.length; i++) {
-      if (argv[i].length() == 0)
-        continue;
+    try {
+      // Override defaults with command-line options
+      for (int i = 0; i < argv.length; i++) {
+        if (argv[i].length() == 0)
+          continue;
 
-      // The following is primarily included so we can ensure that we're
-      // running either a 32-bit or a 64-bit JRE from the Windows .bat file
-      if (argv[i].equalsIgnoreCase("-reqarch")) {
-        if (++i < argv.length) {
-          if (!argv[i].equalsIgnoreCase(System.getProperty("os.arch"))) {
-            reportException(new WarningException("You must use a " +
-              argv[i] +
-              " Java Runtime Environment with this version of TurboVNC."));
-            exit(1);
+        // The following is primarily included so we can ensure that we're
+        // running either a 32-bit or a 64-bit JRE from the Windows .bat file
+        if (argv[i].equalsIgnoreCase("-reqarch")) {
+          if (++i < argv.length) {
+            if (!argv[i].equalsIgnoreCase(System.getProperty("os.arch"))) {
+              reportException(new WarningException("You must use a " +
+                argv[i] +
+                " Java Runtime Environment with this version of TurboVNC."));
+              exit(1);
+            }
           }
+          continue;
         }
-        continue;
-      }
 
-      if (argv[i].equalsIgnoreCase("-config")) {
-        if (++i >= argv.length) usage();
-        try {
-          Params.load(argv[i]);
-        } catch (Exception e) {
-          reportException(e);
-          exit(1);
-        }
-        continue;
-      }
-
-      if (argv[i].equalsIgnoreCase("-loglevel")) {
-        if (++i >= argv.length) usage();
-        System.err.println("Log setting: " + argv[i]);
-        LogWriter.setLogParams(argv[i]);
-        continue;
-      }
-
-      if (argv[i].equalsIgnoreCase("-bench")) {
-        if (i < argv.length - 1) {
+        if (argv[i].equalsIgnoreCase("-config")) {
+          if (++i >= argv.length) usage();
           try {
-            benchFile = new FileInStream(argv[++i]);
+            if (argv[i].toLowerCase().endsWith(".vnc"))
+              params.loadLegacy(argv[i]);
+            else
+              params.load(argv[i]);
           } catch (Exception e) {
-            reportException(
-              new WarningException("Could not open session capture:\n" +
-                                   e.getMessage()));
+            reportException(e);
             exit(1);
           }
+          continue;
         }
-        continue;
-      }
 
-      if (argv[i].equalsIgnoreCase("-benchiter")) {
-        if (i < argv.length - 1) {
-          int iter = Integer.parseInt(argv[++i]);
-          if (iter > 0) benchIter = iter;
+        if (argv[i].equalsIgnoreCase("-loglevel")) {
+          if (++i >= argv.length) usage();
+          System.err.println("Log setting: " + argv[i]);
+          LogWriter.setLogParams(argv[i]);
+          continue;
         }
-        continue;
-      }
 
-      if (argv[i].equalsIgnoreCase("-benchwarmup")) {
-        if (i < argv.length - 1) {
-          int warmup = Integer.parseInt(argv[++i]);
-          if (warmup > 0) benchWarmup = warmup;
-        }
-        continue;
-      }
-
-      if (Params.set(argv[i]))
-        continue;
-
-      if (argv[i].charAt(0) == '-') {
-        int index = 1;
-        if (argv[i].charAt(1) == '-' && argv[i].length() > 2)
-          index = 2;
-        if (i + 1 < argv.length) {
-          if (Params.set(argv[i].substring(index), argv[i + 1])) {
-            i++;
-            continue;
+        if (argv[i].equalsIgnoreCase("-bench")) {
+          if (i < argv.length - 1) {
+            try {
+              benchFile = new FileInStream(argv[++i]);
+            } catch (Exception e) {
+              reportException(
+                new WarningException("Could not open session capture:\n" +
+                                     e.getMessage()));
+              exit(1);
+            }
           }
+          continue;
         }
-        usage();
+
+        if (argv[i].equalsIgnoreCase("-benchiter")) {
+          if (i < argv.length - 1) {
+            int iter = Integer.parseInt(argv[++i]);
+            if (iter > 0) benchIter = iter;
+          }
+          continue;
+        }
+
+        if (argv[i].equalsIgnoreCase("-benchwarmup")) {
+          if (i < argv.length - 1) {
+            int warmup = Integer.parseInt(argv[++i]);
+            if (warmup > 0) benchWarmup = warmup;
+          }
+          continue;
+        }
+
+        if (params.set(argv[i]))
+          continue;
+
+        if (argv[i].charAt(0) == '-') {
+          int index = 1;
+          if (argv[i].length() > 2 && argv[i].charAt(1) == '-')
+            index = 2;
+          if (i + 1 < argv.length) {
+            if (params.set(argv[i].substring(index), argv[i + 1], true)) {
+              i++;
+              continue;
+            }
+          }
+          usage();
+        }
+
+        if (argv[i].toLowerCase().endsWith(".vnc")) {
+          params.loadLegacy(argv[i]);
+          continue;
+        }
+
+        if (argv[i].toLowerCase().endsWith(".turbovnc")) {
+          params.load(argv[i]);
+          continue;
+        }
+
+        if (params.server.get() != null)
+          usage();
+        params.server.set(argv[i]);
       }
 
-      if (argv[i].toLowerCase().endsWith(".vnc")) {
-        try {
-          Params.load(argv[i]);
-        } catch (Exception e) {
-          reportException(e);
-          exit(1);
-        }
-        continue;
-      }
-
-      if (Params.vncServerName.getValue() != null)
-        usage();
-      Params.vncServerName.setParam(argv[i]);
+      params.reconcile();
+    } catch (Exception e) {
+      reportException(e);
+      exit(1);
     }
 
-    setGlobalOptions();
+    setGlobalInsets();
   }
 
-  public static void usage() {
+  public void usage() {
     String usage = "\n" +
-      "USAGE: VncViewer [options/parameters] [host] [options/parameters]\n" +
-      "       VncViewer [options/parameters] [host:displayNum] [options/parameters]\n" +
-      "       VncViewer [options/parameters] [host::port] [options/parameters]\n" +
-      "       VncViewer [options/parameters] -listen [port] [options/parameters]\n" +
+      "USAGE\n" +
+      "-----\n" +
+      "\n" +
+      (Utils.getBooleanProperty("turbovnc.sessmgr", true) ?
+       "vncviewer [options/parameters] [user@]host [options/parameters]\n" +
+       "\n" +
+       "Connect to the specified TurboVNC host using the TurboVNC Session Manager,\n" +
+       "which uses the TurboVNC Viewer's built-in SSH client to remotely start a new\n" +
+       "TurboVNC session or to list all sessions running under your user account on the\n" +
+       "host, allowing you to choose a session to which to connect.  The TurboVNC\n" +
+       "Session Manager requires the TurboVNC Server (v3.0 or later), and by default,\n" +
+       "it expects the TurboVNC Server to be installed under /opt/TurboVNC on the host.\n" +
+       "Refer to the TurboVNC User's Guide for more details.\n" +
+       "\n" : "") +
+      "vncviewer [options/parameters] host:displayNum [options/parameters]\n" +
+      "vncviewer [options/parameters] host::port [options/parameters]\n" +
+      "vncviewer [options/parameters] host::uds_path [options/parameters]\n" +
+      "\n" +
+      "Connect directly to the VNC server that is listening on the specified VNC\n" +
+      "display number, TCP port, or Unix domain socket path on the specified host.\n" +
+      "This mode of operation does not require the TurboVNC Server.\n" +
       "\n" +
       "Multiple VNC servers and associated options/parameters can be specified by\n" +
       "separating the command-line arguments for each server with --.  The TurboVNC\n" +
       "Viewer will connect to the VNC servers serially and in the specified order.\n" +
       "\n" +
+      "vncviewer [options/parameters] -listen [port] [options/parameters]\n" +
+      "\n" +
+      "Start the TurboVNC Viewer in \"listen mode.\"  Refer to the description of the\n" +
+      "Listen parameter below.\n" +
+      "\n" +
       "Options:\n" +
-      "  -loglevel <level>   configure logging level\n" +
-      "                      0 = errors only\n" +
-      "                      10 = status messages\n" +
-      "                      30 = informational messages (default)\n" +
-      "                      100 = debugging messages\n" +
-      "                      110 = SSH debugging messages\n" +
-      "                      150 = extended input device debugging messages\n" +
+      "  -loglevel <level>\n" +
+      "      Set logging level to <level>\n" +
+      "      0 = errors only\n" +
+      "      10 = status messages\n" +
+      "      30 = informational messages (default)\n" +
+      "      100 = debugging messages\n" +
+      "      110 = SSH debugging messages\n" +
+      "      150 = extended input device debugging messages\n" +
+      "\n" +
+      "  [-config] <connection_info_file>\n" +
+      "      Read connection information from <connection_info_file>.  A connection\n" +
+      "      info file has an extension of .turbovnc, and each line of the file\n" +
+      "      contains a TurboVNC Viewer parameter name and value separated by an\n" +
+      "      equals sign (=).  (Any whitespace before the value is ignored.)  If the\n" +
+      "      connection info file has an extension of .vnc, then it is assumed to be a\n" +
+      "      connection info file from TurboVNC 2.2.x and prior, which used a format\n" +
+      "      based on the TightVNC connection info file format.  Connection info files\n" +
+      "      will, when opened on Windows or macOS or dragged & dropped onto the\n" +
+      "      TurboVNC Viewer icon, launch the TurboVNC Viewer and initiate a new\n" +
+      "      connection.  Parameter values specified in a connection info file\n" +
+      "      override parameter values specified on the command line prior to the\n" +
+      "      connection info file but not parameter values specified on the command\n" +
+      "      line after the connection info file.\n" +
       "\n" +
       "Specifying boolean parameters:\n" +
       "  On:   -<param> or --<param> or <param>=1 or -<param>=1 or --<param>=1\n" +
@@ -525,34 +586,36 @@ public class VncViewer implements Runnable, OptionsDialogCallback {
       "Parameters that take a value can be specified as:\n" +
       "  -<param> <value> or --<param> <value> or\n" +
       "  <param>=<value> or -<param>=<value> or --<param>=<value>\n" +
-      "Parameter names and values are case-insensitive (except for the value of\n" +
-      "Password.)\n\n" +
+      "Parameter names and values are case-insensitive (except for hostnames,\n" +
+      "unencrypted passwords/passphrases, filenames, SSH keys, and usernames.)\n\n" +
+      "Default values for all parameters can be specified in\n" +
+      "  " + Utils.getHomeDir() + ".vnc" + Utils.getFileSeparator() +
+      "default.turbovnc\n" +
+      "using the connection info file syntax described above.\n\n" +
       "The parameters are:\n\n";
     System.out.println("\nTurboVNC Viewer v" + version + " (build " + build +
-                       ") [JVM: " + System.getProperty("os.arch") + "]");
+                       ") [" + System.getProperty("os.arch") + "]");
     System.out.println("Copyright (C) " + copyrightYear + " " + copyright);
     System.out.println(url);
     System.out.print(usage);
-    Params.list(80);
+    params.list(80);
     System.exit(1);
   }
 
-  public VncViewer(Socket sock_) {
-    sock = sock_;
-    opts.serverName = null;
-    opts.port = -1;
+  public VncViewer(Socket sock_, Params params_) {
+    params = params_;  sock = sock_;
   }
 
   public static void newViewer(VncViewer oldViewer, Socket sock,
                                boolean close) {
-    VncViewer viewer = new VncViewer(sock);
+    VncViewer viewer = new VncViewer(sock, new Params(oldViewer.getParams()));
     viewer.start();
     if (close)
       oldViewer.exit(0);
   }
 
   public static void newViewer(VncViewer oldViewer) {
-    if (!Params.noNewConn.getValue())
+    if (!oldViewer.getParams().noNewConn.get())
       newViewer(oldViewer, null, false);
   }
 
@@ -585,11 +648,11 @@ public class VncViewer implements Runnable, OptionsDialogCallback {
 
   public void start() {
     vlog.debug("start called");
-    String host = opts.serverName;
-    if (host != null && host.indexOf(':') < 0 &&
-        opts.port > 0) {
-      opts.serverName = host + ((opts.port >= 5900 && opts.port <= 5999) ?
-                         (":" + (opts.port - 5900)) : ("::" + opts.port));
+    String host = params.server.get();
+    int port = params.port.get();
+    if (host != null && Hostname.getColonPos(host) < 0 && port > 0) {
+      params.server.set(host + ((port >= 5900 && port <= 5999) ?
+                                (":" + (port - 5900)) : ("::" + port)));
     }
     nViewers++;
     thread = new Thread(this);
@@ -634,7 +697,7 @@ public class VncViewer implements Runnable, OptionsDialogCallback {
     Object[] dlgOptions = { UIManager.getString("OptionPane.yesButtonText"),
                             UIManager.getString("OptionPane.noButtonText") };
     if (reconnect)
-      pane = new JOptionPane(msg + "\nReconnect?", msgType,
+      pane = new JOptionPane(msg + "\nAttempt to reconnect?", msgType,
                              JOptionPane.YES_NO_OPTION, null, dlgOptions,
                              dlgOptions[1]);
     else
@@ -642,9 +705,11 @@ public class VncViewer implements Runnable, OptionsDialogCallback {
     JDialog dlg = pane.createDialog(null, title);
     dlg.setAlwaysOnTop(true);
     dlg.setVisible(true);
-    if (reconnect && pane.getValue() == dlgOptions[0])
+    if (reconnect && pane.getValue() == dlgOptions[0]) {
+      if (!(e instanceof AuthFailureException))
+        params.server.set(null);
       start();
-    else {
+    } else {
       synchronized(this) {
         this.notify();
       }
@@ -666,24 +731,25 @@ public class VncViewer implements Runnable, OptionsDialogCallback {
   }
 
   void showOptions() {
-    options = new OptionsDialog(this);
+    options = new OptionsDialog(this, params);
     options.initDialog();
     options.showDialog();
   }
 
   public void setTightOptions() {
-    options.setTightOptions(opts.preferredEncoding);
+    options.setTightOptions(params.encoding.get());
   }
 
   public void setOptions() {
+    UserPreferences.load(".listen", params);
+    options.setNode(".listen");
     options.setX509Enabled(false);
-    options.setOptions(opts, true, true, false, true);
+    options.setOptions(true, true, false, true);
     setTightOptions();
   }
 
   public void getOptions() {
-    options.getOptions(opts);
-    opts.save();
+    options.getOptions();
     options = null;
   }
 
@@ -700,15 +766,18 @@ public class VncViewer implements Runnable, OptionsDialogCallback {
     CConn cc = null;
     int exitStatus = 0;
 
-    if (Params.listenMode.getValue()) {
+    if (Utils.getBooleanProperty("turbovnc.autotest", false))
+      noExceptionDialog = true;
+
+    if (params.listenMode.get()) {
       int port = 5500;
 
-      Params.listenMode.setParam(false);
-      if (opts.serverName != null &&
-          Character.isDigit(opts.serverName.charAt(0)))
-        port = Integer.parseInt(opts.serverName);
-      else if (opts.port > 0)
-        port = opts.port;
+      params.listenMode.set(false);
+      String server = params.server.get();
+      if (server != null && Character.isDigit(server.charAt(0)))
+        port = Integer.parseInt(server);
+      else if (params.port.get() > 0)
+        port = params.port.get();
 
       if (TrayMenu.isSupported()) {
         try {
@@ -732,7 +801,7 @@ public class VncViewer implements Runnable, OptionsDialogCallback {
       while (true) {
         Socket newSock = listener.accept();
         if (newSock != null)
-          newViewer(this, newSock, Params.noNewConn.getValue());
+          newViewer(this, newSock, params.noNewConn.get());
         else {
           listener.shutdown();
           vlog.info("Listener exiting ...");
@@ -749,7 +818,7 @@ public class VncViewer implements Runnable, OptionsDialogCallback {
 
       try {
         if (cc == null) {
-          cc = new CConn(this, sock);
+          cc = new CConn(this, sock, params);
           if (benchFile == null) {
             synchronized(conns) {
               conns.add(cc);
@@ -757,6 +826,8 @@ public class VncViewer implements Runnable, OptionsDialogCallback {
           }
         }
         if (benchFile != null) {
+          params.desktopSize.setMode(DesktopSize.SERVER);
+          params.toolbar.set(false);
           if (i < benchWarmup)
             System.out.format("Benchmark warmup run %d\n", i + 1);
           else
@@ -796,17 +867,22 @@ public class VncViewer implements Runnable, OptionsDialogCallback {
           cc.reset();
           System.gc();
         } else {
-          while (!cc.shuttingDown)
+          while (!cc.shuttingDown) {
             cc.processMsg(false);
+            if (Utils.getBooleanProperty("turbovnc.autotest", false) &&
+                cc.state() == CConnection.RFBSTATE_INITIALISATION)
+              cc.close(true);
+          }
           synchronized(conns) {
             conns.remove(cc);
           }
         }
       } catch (Exception e) {
         if (cc == null || !cc.shuttingDown) {
-          reportException(e, cc != null &&
-                          cc.state() == CConnection.RFBSTATE_NORMAL &&
-                          !Params.noReconnect.getValue());
+          reportException(e, !params.noReconnect.get() &&
+                             ((cc != null &&
+                               cc.state() == CConnection.RFBSTATE_NORMAL) ||
+                              e instanceof WarningException));
           exitStatus = 1;
           if (cc != null) {
             cc.deleteWindow(true);
@@ -834,149 +910,6 @@ public class VncViewer implements Runnable, OptionsDialogCallback {
     exit(exitStatus);
   }
 
-  void setGlobalOptions() {
-    try {
-
-      if (opts == null)
-        opts = new Options();
-
-      // CONNECTION OPTIONS
-      opts.port = Params.vncServerPort.getValue();
-      Params.vncServerPort.setValue(-1);
-      opts.recvClipboard = Params.recvClipboard.getValue();
-      opts.sendClipboard = Params.sendClipboard.getValue();
-      opts.shared = Params.shared.getValue();
-
-      // INPUT OPTIONS
-      opts.fsAltEnter = Params.fsAltEnter.getValue();
-      if (Utils.osGrab()) {
-        if (Params.grabKeyboard.getValue().toLowerCase().startsWith("f"))
-          opts.grabKeyboard = Options.GRAB_FS;
-        else if (Params.grabKeyboard.getValue().toLowerCase().startsWith("a"))
-          opts.grabKeyboard = Options.GRAB_ALWAYS;
-        else if (Params.grabKeyboard.getValue().toLowerCase().startsWith("m"))
-          opts.grabKeyboard = Options.GRAB_MANUAL;
-      }
-      opts.menuKeyCode = MenuKey.getMenuKeyCode(Params.menuKey.getValue());
-      opts.menuKeySym = MenuKey.getMenuKeySym(Params.menuKey.getValue());
-      opts.reverseScroll = Params.reverseScroll.getValue();
-      opts.viewOnly = Params.viewOnly.getValue();
-
-      // DISPLAY OPTIONS
-      opts.acceptBell = Params.acceptBell.getValue();
-      opts.cursorShape = Params.cursorShape.getValue();
-
-      if (benchFile != null)
-        opts.desktopSize.mode = Options.SIZE_SERVER;
-      else {
-        Options.DesktopSize size =
-          Options.parseDesktopSize(Params.desktopSize.getValue());
-        if (size == null)
-          throw new ErrorException("DesktopSize parameter is incorrect");
-        opts.desktopSize = size;
-      }
-
-      opts.fullScreen = Params.fullScreen.getValue();
-
-      opts.scalingFactor =
-        Integer.parseInt(Params.scalingFactor.getDefaultStr());
-      opts.setScalingFactor(Params.scalingFactor.getValue());
-      if (opts.scalingFactor != 100 &&
-          opts.desktopSize.mode == Options.SIZE_AUTO) {
-        vlog.info("Desktop scaling enabled.  Disabling automatic desktop resizing.");
-        opts.desktopSize.mode = Options.SIZE_SERVER;
-      }
-
-      if (Params.span.getValue().toLowerCase().startsWith("p"))
-        opts.span = Options.SPAN_PRIMARY;
-      else if (Params.span.getValue().toLowerCase().startsWith("al"))
-        opts.span = Options.SPAN_ALL;
-      else
-        opts.span = Options.SPAN_AUTO;
-
-      opts.showToolbar = Params.showToolbar.getValue() && (benchFile == null);
-
-      // ENCODING OPTIONS
-      opts.compressLevel = Params.compressLevel.getValue();
-
-      String encStr = Params.preferredEncoding.getValue();
-      int encNum = RFB.encodingNum(encStr);
-      if (encNum != -1)
-        opts.preferredEncoding = encNum;
-      else
-        opts.preferredEncoding =
-          RFB.encodingNum(Params.preferredEncoding.getDefaultStr());
-
-      opts.allowJpeg = Params.allowJpeg.getValue();
-      opts.quality = Params.quality.getValue();
-
-      opts.subsampling = Options.SUBSAMP_NONE;
-      switch (Params.subsampling.getValue().toUpperCase().charAt(0)) {
-        case '2':
-          opts.subsampling = Options.SUBSAMP_2X;
-          break;
-        case '4':
-          opts.subsampling = Options.SUBSAMP_4X;
-          break;
-        case 'G':
-          opts.subsampling = Options.SUBSAMP_GRAY;
-          break;
-      }
-
-      // SECURITY AND AUTHENTICATION OPTIONS
-      opts.sendLocalUsername = Params.sendLocalUsername.getValue();
-      if (Params.user.getValue() != null)
-        opts.user = new String(Params.user.getValue());
-      opts.setSecurityTypes(Params.secTypes.getValue());
-      opts.tunnel = Params.tunnel.getValue();
-
-      String v = Params.via.getValue();
-      if (v != null && !v.isEmpty()) {
-        int atIndex = v.lastIndexOf('@');
-        if (atIndex >= 0) {
-          opts.via = v.substring(atIndex + 1);
-          opts.sshUser = v.substring(0, atIndex);
-        } else {
-          opts.via = new String(v);
-        }
-        if (opts.via != null) {
-          opts.via = opts.via.replaceAll("\\s", "");
-          if (opts.via.length() == 0)
-            opts.via = null;
-        }
-      }
-
-      if (Params.x509ca.getValue() != null)
-        opts.x509ca = new String(Params.x509ca.getValue());
-      if (Params.x509crl.getValue() != null)
-        opts.x509crl = new String(Params.x509crl.getValue());
-
-      String s = Params.vncServerName.getValue();
-      if (s != null) {
-        int atIndex = s.lastIndexOf('@');
-        if (atIndex >= 0) {
-          opts.serverName = s.substring(atIndex + 1);
-          opts.sshUser = s.substring(0, atIndex);
-        } else {
-          opts.serverName = new String(s);
-        }
-        if (opts.serverName != null) {
-          opts.serverName = opts.serverName.replaceAll("\\s", "");
-          if (opts.serverName.length() == 0)
-            opts.serverName = null;
-        }
-      }
-      Params.vncServerName.setParam(null);
-
-    } catch (Exception e) {
-      reportException(new WarningException("Could not set global options:\n" +
-                                           e.getMessage()));
-      exit(1);
-    }
-
-    setGlobalInsets();
-  }
-
   // Is the keyboard grabbed by any TurboVNC Viewer window?
   public static boolean isKeyboardGrabbed() {
     synchronized(VncViewer.class) {
@@ -997,6 +930,8 @@ public class VncViewer implements Runnable, OptionsDialogCallback {
     }
   }
 
+  public Params getParams() { return params; }
+
   Thread thread;
   Socket sock;
   static int nViewers;
@@ -1004,7 +939,7 @@ public class VncViewer implements Runnable, OptionsDialogCallback {
   FileInStream benchFile;
   int benchIter = 1;
   int benchWarmup = 0;
-  static Options opts;
+  private Params params;
   static boolean forceAlpha;
   OptionsDialog options;
   TrayMenu trayMenu;

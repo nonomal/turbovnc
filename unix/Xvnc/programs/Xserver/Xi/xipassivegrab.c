@@ -93,6 +93,7 @@ ProcXIPassiveGrabDevice(ClientPtr client)
     GrabParameters param;
     void *tmp;
     int mask_len;
+    uint32_t length;
 
     REQUEST(xXIPassiveGrabDeviceReq);
     REQUEST_FIXED_SIZE(xXIPassiveGrabDeviceReq,
@@ -132,6 +133,12 @@ ProcXIPassiveGrabDevice(ClientPtr client)
         client->errorValue = stuff->grab_mode;
         return BadValue;
     }
+
+    /* XI2 allows 32-bit keycodes but thanks to XKB we can never
+     * implement this. Just return an error for all keycodes that
+     * cannot work anyway, same for buttons > 255. */
+    if (stuff->detail > 255)
+        return XIAlreadyGrabbed;
 
     if (XICheckInvalidMaskBits(client, (unsigned char *) &stuff[1],
                                stuff->mask_len * 4) != Success)
@@ -203,14 +210,8 @@ ProcXIPassiveGrabDevice(ClientPtr client)
                                 &param, XI2, &mask);
             break;
         case XIGrabtypeKeycode:
-            /* XI2 allows 32-bit keycodes but thanks to XKB we can never
-             * implement this. Just return an error for all keycodes that
-             * cannot work anyway */
-            if (stuff->detail > 255)
-                status = XIAlreadyGrabbed;
-            else
-                status = GrabKey(client, dev, mod_dev, stuff->detail,
-                                 &param, XI2, &mask);
+            status = GrabKey(client, dev, mod_dev, stuff->detail,
+                             &param, XI2, &mask);
             break;
         case XIGrabtypeEnter:
         case XIGrabtypeFocusIn:
@@ -234,9 +235,11 @@ ProcXIPassiveGrabDevice(ClientPtr client)
         }
     }
 
+    /* save the value before SRepXIPassiveGrabDevice swaps it */
+    length = rep.length;
     WriteReplyToClient(client, sizeof(rep), &rep);
     if (rep.num_modifiers)
-        WriteToClient(client, rep.length * 4, modifiers_failed);
+        WriteToClient(client, length * 4, modifiers_failed);
 
  out:
     free(modifiers_failed);
@@ -315,6 +318,12 @@ ProcXIPassiveUngrabDevice(ClientPtr client)
     if ((stuff->grab_type == XIGrabtypeEnter ||
          stuff->grab_type == XIGrabtypeFocusIn ||
          stuff->grab_type == XIGrabtypeTouchBegin) && stuff->detail != 0) {
+        client->errorValue = stuff->detail;
+        return BadValue;
+    }
+
+    /* We don't allow passive grabs for details > 255 anyway */
+    if (stuff->detail > 255) {
         client->errorValue = stuff->detail;
         return BadValue;
     }

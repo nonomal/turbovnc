@@ -44,7 +44,7 @@ message(STATUS "Linker flags = ${EFFECTIVE_LD_FLAGS}")
 # VIEWER BUILD
 ###############################################################################
 
-if(TVNC_BUILDHELPER)
+if(TVNC_BUILDVIEWER)
 	add_subdirectory(vncviewer)
 endif()
 
@@ -68,15 +68,26 @@ option(TVNC_NVCONTROL
 	"Include fake NV-CONTROL extension in Xvnc (causes Xvnc to depend on the system's libX11 and libXext)"
 	ON)
 
+set(ELIGIBLE_SYSTEMLIBS "bzip2 and FreeType")
+if((CPU_TYPE STREQUAL "x86_64" OR CPU_TYPE STREQUAL "i386") AND
+	NOT CMAKE_C_COMPILER_ID MATCHES SunPro)
+	set(ELIGIBLE_SYSTEMLIBS "zlib, bzip2, and FreeType")
+endif()
 option(TVNC_SYSTEMLIBS
-	"Build the TurboVNC Server against the system-supplied versions of zlib, bzip2, and FreeType rather than the in-tree versions"
+	"Build the TurboVNC Server against the system-supplied versions of ${ELIGIBLE_SYSTEMLIBS} rather than the in-tree versions"
 	OFF)
 boolean_number(TVNC_SYSTEMLIBS)
-report_option(TVNC_SYSTEMLIBS "System zlib/bzip2/FreeType")
+report_option(TVNC_SYSTEMLIBS "System ${ELIGIBLE_SYSTEMLIBS}")
 
-if(NOT TVNC_SYSTEMLIBS)
-	add_subdirectory(${CMAKE_SOURCE_DIR}/common ${CMAKE_BINARY_DIR}/common)
+option(TVNC_STATIC_XORG_PATHS
+	"Force vncserver and Xvnc to use the XKB base directory, XKB binary directory, X.org DRI driver path, X.org font path, and X.org registry path specified in the XKB_BASE_DIRECTORY, XKB_BIN_DIRECTORY, XORG_DRI_DRIVER_PATH, XORG_FONT_PATH, and XORG_REGISTRY_PATH CMake variables rather than detecting the appropriate paths at run time"
+	OFF)
+boolean_number(TVNC_STATIC_XORG_PATHS)
+report_option(TVNC_STATIC_XORG_PATHS "Static X.org paths")
+if(TVNC_STATIC_XORG_PATHS)
+	add_definitions(-DTURBOVNC_STATIC_XORG_PATHS)
 endif()
+
 add_subdirectory(libvncauth)
 if(TVNC_NVCONTROL)
 	add_subdirectory(libXNVCtrl)
@@ -105,7 +116,7 @@ if(TVNC_BUILDWEBSERVER)
 		if(CMAKE_SYSTEM_NAME MATCHES "(OpenBSD|FreeBSD|NetBSD|DragonFly)")
 			set(PYTHON_EXECUTABLE ${Python_EXECUTABLE})
 		else()
-			string(REGEX REPLACE "\.[0-9]+$" "" PYTHON_EXECUTABLE
+			string(REGEX REPLACE "\\.[0-9]+$" "" PYTHON_EXECUTABLE
 				${Python_EXECUTABLE})
 			set(PYTHON_EXECUTABLE ${PYTHON_EXECUTABLE} PARENT_SCOPE)
 		endif()
@@ -125,8 +136,7 @@ endif()
 configure_file(vncserver.man.in vncserver.man @ONLY)
 install(FILES ${CMAKE_CURRENT_BINARY_DIR}/vncserver.man
 	DESTINATION ${CMAKE_INSTALL_MANDIR}/man1 RENAME vncserver.1)
-configure_file(turbovncserver.conf.in turbovncserver.conf @ONLY)
-install(FILES ${CMAKE_CURRENT_BINARY_DIR}/turbovncserver.conf
+install(FILES ${CMAKE_CURRENT_SOURCE_DIR}/turbovncserver.conf
 	DESTINATION ${CMAKE_INSTALL_FULL_SYSCONFDIR})
 install(FILES ${CMAKE_CURRENT_SOURCE_DIR}/turbovncserver-security.conf
 	DESTINATION ${CMAKE_INSTALL_FULL_SYSCONFDIR})
@@ -138,11 +148,18 @@ install(PROGRAMS ${CMAKE_CURRENT_SOURCE_DIR}/xstartup.turbovnc
 	DESTINATION ${CMAKE_INSTALL_BINDIR})
 
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
-	configure_file(vncserver.init.in vncserver.init @ONLY)
-	install(PROGRAMS ${CMAKE_CURRENT_BINARY_DIR}/vncserver.init
-		DESTINATION ${CMAKE_INSTALL_FULL_SYSCONFDIR}/init.d RENAME tvncserver)
-	install(FILES ${CMAKE_CURRENT_SOURCE_DIR}/tvncservers
-		DESTINATION ${CMAKE_INSTALL_FULL_SYSCONFDIR}/sysconfig)
+	option(TVNC_BUILDINITSCRIPT "Build TurboVNC Server init script" 1)
+	boolean_number(TVNC_BUILDINITSCRIPT)
+	boolean_number(TVNC_BUILDINITSCRIPT PARENT_SCOPE)
+	report_option(TVNC_BUILDINITSCRIPT "TurboVNC Server init script")
+
+	if(TVNC_BUILDINITSCRIPT)
+		configure_file(vncserver.init.in vncserver.init @ONLY)
+		install(PROGRAMS ${CMAKE_CURRENT_BINARY_DIR}/vncserver.init
+			DESTINATION ${CMAKE_INSTALL_FULL_SYSCONFDIR}/init.d RENAME tvncserver)
+		install(FILES ${CMAKE_CURRENT_SOURCE_DIR}/tvncservers
+			DESTINATION ${CMAKE_INSTALL_FULL_SYSCONFDIR}/sysconfig)
+	endif()
 endif()
 
 endif() # TVNC_BUILDSERVER

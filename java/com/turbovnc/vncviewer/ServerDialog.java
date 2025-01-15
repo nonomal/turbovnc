@@ -1,6 +1,7 @@
-/* Copyright (C) 2002-2005 RealVNC Ltd.  All Rights Reserved.
+/* Copyright (C) 2012-2015, 2018, 2020, 2022, 2024 D. R. Commander.
+ *                                                 All Rights Reserved.
  * Copyright (C) 2011-2013 Brian P. Hinz
- * Copyright (C) 2012-2015, 2018, 2020 D. R. Commander.  All Rights Reserved.
+ * Copyright (C) 2002-2005 RealVNC Ltd.  All Rights Reserved.
  *
  * This is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -26,17 +27,18 @@ import javax.swing.*;
 import javax.swing.border.*;
 import javax.swing.WindowConstants.*;
 import java.util.*;
+import java.util.prefs.Preferences;
 
 import com.turbovnc.rdr.*;
 import com.turbovnc.rfb.*;
 
 class ServerDialog extends Dialog implements ActionListener {
 
-  ServerDialog(OptionsDialog options_, Options opts_, CConn cc_) {
+  ServerDialog(OptionsDialog options_, Params params_, CConn cc_) {
 
     super(true);
     cc = cc_;
-    opts = opts_;
+    params = params_;
 
     options = options_;
 
@@ -49,7 +51,8 @@ class ServerDialog extends Dialog implements ActionListener {
     }
     JLabel sessionLabel =
       new JLabel(Utils.getBooleanProperty("turbovnc.sessmgr", true) ?
-                 "host:displayNum, host::port = connect to VNC server" : "");
+                 "host:displayNum, host::port, host::uds_path = " +
+                 "connect to VNC server" : "");
     JLabel sessionLabel2 =
       new JLabel(Utils.getBooleanProperty("turbovnc.sessmgr", true) ?
                  "[user@]host = start TurboVNC Session Manager for host" : "");
@@ -69,18 +72,18 @@ class ServerDialog extends Dialog implements ActionListener {
     editor = server.getEditor();
     filterWhitespace((JTextField)editor.getEditorComponent());
     editor.getEditorComponent().addKeyListener(new KeyListener() {
-      public void keyTyped(KeyEvent e) { updateConnectButton(); }
-      public void keyReleased(KeyEvent e) { updateConnectButton(); }
+      public void keyTyped(KeyEvent e) { updateButtons(); }
+      public void keyReleased(KeyEvent e) { updateButtons(); }
       public void keyPressed(KeyEvent e) {
-        updateConnectButton();
+        updateButtons();
         if (e.getKeyCode() == KeyEvent.VK_ENTER && okButton.isEnabled()) {
           if (commit())
             endDialog();
         }
       }
     });
-    if (opts.serverName != null)
-      server.setSelectedItem(opts.serverName);
+    if (params.server.get() != null)
+      server.setSelectedItem(params.server.get());
 
     topPanel = new JPanel(new GridBagLayout());
 
@@ -113,7 +116,7 @@ class ServerDialog extends Dialog implements ActionListener {
     optionsButton = new JButton("Options...");
     aboutButton = new JButton("About...");
     okButton = new JButton("Connect");
-    updateConnectButton();
+    updateButtons();
     cancelButton = new JButton("Cancel");
     buttonPanel = new JPanel(new GridBagLayout());
     buttonPanel.setPreferredSize(new Dimension(350, 40));
@@ -179,9 +182,12 @@ class ServerDialog extends Dialog implements ActionListener {
     dlg.pack();
   }
 
-  private void updateConnectButton() {
-    okButton.setEnabled(editor.getItem() != null &&
-                        ((String)editor.getItem()).length() > 0);
+  private void updateButtons() {
+    String serverStr = (String)editor.getItem();
+    if (serverStr != null)
+      serverStr = Hostname.getHost(serverStr);
+    okButton.setEnabled(serverStr != null && serverStr.length() > 0);
+    optionsButton.setEnabled(serverStr != null && serverStr.length() > 0);
   }
 
   public void actionPerformed(ActionEvent e) {
@@ -195,58 +201,69 @@ class ServerDialog extends Dialog implements ActionListener {
       ret = false;
       endDialog();
     } else if (s instanceof JButton && (JButton)s == optionsButton) {
-      options.showDialog(getJDialog());
+      if (editor.getItem() != null &&
+          ((String)editor.getItem()).length() > 0) {
+        String serverStr = Hostname.getHost((String)editor.getItem());
+        UserPreferences.load(serverStr, params);
+        options.setNode(serverStr);
+        options.showDialog(getJDialog());
+      }
       if (UserPreferences.get("ServerDialog", "history") == null) {
         String serverStr = (String)editor.getItem();
         server.removeAllItems();
         if (serverStr != null && serverStr.length() > 0)
           ((JTextField)editor.getEditorComponent()).setText(serverStr);
-        updateConnectButton();
+        updateButtons();
       }
     } else if (s instanceof JButton && (JButton)s == aboutButton) {
       VncViewer.showAbout(getJDialog());
     } else if (s instanceof JComboBox && (JComboBox)s == server) {
       if (e.getActionCommand().equals("comboBoxEdited") ||
           e.getActionCommand().equals("comboBoxChanged"))
-        updateConnectButton();
+        updateButtons();
     }
   }
 
   private boolean commit() {
     try {
 
-      String serverName = (String)editor.getItem();
-      if (serverName == null || serverName.equals(""))
+      String serverStr = (String)editor.getItem();
+      if (serverStr == null || serverStr.equals(""))
         throw new WarningException("No server name specified");
 
       // set params
-      if (opts.via != null && opts.via.indexOf(':') >= 0) {
-        opts.serverName = serverName;
+      if (params.via.get() != null &&
+          Hostname.getColonPos(params.via.get()) >= 0) {
+        params.server.set(serverStr);
       } else {
-        int atIndex = serverName.lastIndexOf('@');
-        if (atIndex >= 0) {
-          opts.serverName =
-            Hostname.getHost(serverName.substring(atIndex + 1));
-          opts.sshUser = serverName.substring(0, atIndex);
-        } else {
-          opts.serverName = Hostname.getHost(serverName);
-        }
-        opts.port = Hostname.getPort(serverName);
+        params.sshUser.set(Hostname.getSSHUser(serverStr));
+        params.server.set(Hostname.getHost(serverStr));
+        params.port.set(Hostname.getPort(serverStr));
+        params.udsPath = Hostname.getUDSPath(serverStr);
       }
 
       // Update the history list
       String valueStr = UserPreferences.get("ServerDialog", "history");
       String t = (valueStr == null) ? "" : valueStr;
       StringTokenizer st = new StringTokenizer(t, ",");
-      StringBuffer sb = new StringBuffer().append(serverName);
+      StringBuffer sb = new StringBuffer().append(serverStr);
       while (st.hasMoreTokens()) {
         String str = st.nextToken();
-        if (!str.equals(serverName) && !str.equals("")) {
+        if (!str.equals(serverStr) && !str.equals("")) {
           sb.append(',');
           sb.append(str);
         }
       }
-      UserPreferences.set("ServerDialog", "history", sb.toString());
+      String history = sb.toString();
+      if (history.length() > Preferences.MAX_VALUE_LENGTH) {
+        int lastComma =
+          history.lastIndexOf(',', Preferences.MAX_VALUE_LENGTH);
+        if (lastComma <= 0)
+          history = "";
+        else
+          history = history.substring(0, lastComma);
+      }
+      UserPreferences.set("ServerDialog", "history", history);
       UserPreferences.save("ServerDialog");
 
     } catch (Exception e) {
@@ -259,7 +276,7 @@ class ServerDialog extends Dialog implements ActionListener {
 
   Window win;
   CConn cc;
-  Options opts;
+  Params params;
   JComboBox server;
   ComboBoxEditor editor;
   JPanel topPanel, buttonPanel;

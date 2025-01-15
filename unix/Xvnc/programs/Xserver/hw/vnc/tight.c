@@ -4,28 +4,27 @@
  * Routines to implement Tight Encoding
  */
 
-/*
- *  Copyright (C) 2010-2012, 2014, 2017, 2022 D. R. Commander.
- *                                            All Rights Reserved.
- *  Copyright (C) 2005-2008 Sun Microsystems, Inc.  All Rights Reserved.
- *  Copyright (C) 2004 Landmark Graphics Corporation.  All Rights Reserved.
- *  Copyright (C) 2000, 2001 Const Kaplinsky.  All Rights Reserved.
- *  Copyright (C) 1999 AT&T Laboratories Cambridge.  All Rights Reserved.
+/* Copyright (C) 2010-2012, 2014, 2017, 2022, 2024 D. R. Commander.
+ *                                                 All Rights Reserved.
+ * Copyright (C) 2005-2008 Sun Microsystems, Inc.  All Rights Reserved.
+ * Copyright (C) 2004 Landmark Graphics Corporation.  All Rights Reserved.
+ * Copyright (C) 2000, 2001 Const Kaplinsky.  All Rights Reserved.
+ * Copyright (C) 1999 AT&T Laboratories Cambridge.  All Rights Reserved.
  *
- *  This is free software; you can redistribute it and/or modify
- *  it under the terms of the GNU General Public License as published by
- *  the Free Software Foundation; either version 2 of the License, or
- *  (at your option) any later version.
+ * This is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
  *
- *  This software is distributed in the hope that it will be useful,
- *  but WITHOUT ANY WARRANTY; without even the implied warranty of
- *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- *  GNU General Public License for more details.
+ * This software is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  *
- *  You should have received a copy of the GNU General Public License
- *  along with this software; if not, write to the Free Software
- *  Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301,
- *  USA.
+ * You should have received a copy of the GNU General Public License
+ * along with this software; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301,
+ * USA.
  */
 
 #include <stdio.h>
@@ -91,6 +90,11 @@ static TIGHT_CONF tightConf[4] = {
   { 65536, 2048,  32, 3, 3, 2,  96, 96 },  /* 2  (used only with JPEG) */
   { 65536, 2048,  32, 7, 7, 5,  96, 256 }  /* 9 */
 };
+
+int rfbMaxTightRectSize = 0;
+#define MAXRECTSIZE  \
+  (rfbMaxTightRectSize ? rfbMaxTightRectSize :  \
+                         tightConf[compressLevel].maxRectSize)
 
 static int compressLevel;
 static int qualityLevel;
@@ -221,7 +225,7 @@ int rfbNumCodedRectsTight(rfbClientPtr cl, int x, int y, int w, int h)
   if (cl->enableLastRectEncoding && w * h >= MIN_SPLIT_RECT_SIZE)
     return 0;
 
-  maxRectSize = tightConf[compressLevel].maxRectSize;
+  maxRectSize = MAXRECTSIZE;
   maxRectWidth = tightConf[compressLevel].maxRectWidth;
 
   if (w > maxRectWidth || w * h > maxRectSize) {
@@ -401,7 +405,7 @@ Bool rfbSendRectEncodingTight(rfbClientPtr cl, int x, int y, int w, int h)
   else
     usePixelFormat24 = FALSE;
 
-  nt = min(rfbNumThreads, w * h / tightConf[compressLevel].maxRectSize);
+  nt = min(rfbNumThreads, w * h / MAXRECTSIZE);
   if (nt < 1) nt = 1;
 
   for (i = 0; i < nt; i++) {
@@ -445,12 +449,8 @@ Bool rfbSendRectEncodingTight(rfbClientPtr cl, int x, int y, int w, int h)
         return FALSE;
     }
     for (i = 1; i < nt; i++) {
-      if ((*tparam[i].ublen) > 0 &&
-          WriteExact(cl, tparam[i].updateBuf, *tparam[i].ublen) < 0) {
-        rfbLogPerror("rfbSendRectEncodingTight: write");
-        rfbCloseClient(cl);
-        return FALSE;
-      }
+      if ((*tparam[i].ublen) > 0)
+        WRITE_OR_CLOSE(tparam[i].updateBuf, *tparam[i].ublen, return FALSE);
       (*tparam[i].ublen) = 0;
       cl->rfbBytesSent[rfbEncodingTight] += tparam[i].bytessent;
       cl->rfbRectanglesSent[rfbEncodingTight] += tparam[i].rectsent;
@@ -502,7 +502,7 @@ static Bool SendRectEncodingTight(threadparam *t, int x, int y, int w, int h)
   {
     int maxRectSize, maxRectWidth, nMaxWidth;
 
-    maxRectSize = tightConf[compressLevel].maxRectSize;
+    maxRectSize = MAXRECTSIZE;
     maxRectWidth = tightConf[compressLevel].maxRectWidth;
     nMaxWidth = (w > maxRectWidth) ? maxRectWidth : w;
     nMaxRows = maxRectSize / nMaxWidth;
@@ -746,7 +746,7 @@ static Bool SendRectSimple(threadparam *t, int x, int y, int w, int h)
   int rw, rh;
   rfbClientPtr cl = t->cl;
 
-  maxRectSize = tightConf[compressLevel].maxRectSize;
+  maxRectSize = MAXRECTSIZE;
   maxRectWidth = tightConf[compressLevel].maxRectWidth;
 
   maxBeforeSize = maxRectSize * (cl->format.bitsPerPixel / 8);
@@ -1692,7 +1692,7 @@ static Bool SendJpegRect(threadparam *t, int x, int y, int w, int h,
   }
   if (!t->j) {
     if ((t->j = tjInitCompress()) == NULL) {
-      rfbLog("JPEG Error: %s\n", tjGetErrorStr());
+      RFBLOGID("JPEG Error: %s\n", tjGetErrorStr());
       return 0;
     }
   }
@@ -1728,7 +1728,7 @@ static Bool SendJpegRect(threadparam *t, int x, int y, int w, int h,
   if (tjCompress(t->j, srcbuf, w, pitch, h, ps,
                  (unsigned char *)t->tightAfterBuf, &size, subsamp, quality,
                  flags) == -1) {
-    rfbLog("JPEG Error: %s\n", tjGetErrorStr());
+    RFBLOGID("JPEG Error: %s\n", tjGetErrorStr());
     free(tmpbuf);  tmpbuf = NULL;
     return 0;
   }

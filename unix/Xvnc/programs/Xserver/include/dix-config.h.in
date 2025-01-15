@@ -24,9 +24,6 @@
 /* Define to 1 if you have the `getzoneid' function. */
 #cmakedefine HAVE_GETZONEID
 
-/* Define to 1 if you have the <ieeefp.h> header file. */
-#cmakedefine HAVE_IEEEFP_H
-
 /* Define to 1 if you have the `issetugid' function. */
 #cmakedefine HAVE_ISSETUGID
 
@@ -61,13 +58,16 @@
 #define typeof @TYPEOF@
 
 /* Use XTrans FD passing support */
-#define XTRANS_SEND_FDS @XTRANS_SEND_FDS@
+#define XTRANS_SEND_FDS 1
 
 /* Wrap SIGBUS to catch MIT-SHM faults */
 #define BUSFAULT 1
 
 /* Listen on Unix socket */
 #define LISTEN_UNIX
+
+/* Listen on abstract socket */
+#cmakedefine LISTEN_LOCAL
 
 /* Have setitimer support */
 #cmakedefine HAVE_SETITIMER

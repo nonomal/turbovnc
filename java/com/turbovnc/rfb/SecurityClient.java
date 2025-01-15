@@ -1,8 +1,8 @@
-/* Copyright (C) 2002-2005 RealVNC Ltd.  All Rights Reserved.
- * Copyright (C) 2010 TigerVNC Team
- * Copyright (C) 2011-2012 Brian P. Hinz
- * Copyright (C) 2012, 2015-2016, 2018, 2020-2021 D. R. Commander.
+/* Copyright (C) 2012, 2015-2016, 2018, 2020-2022 D. R. Commander.
  *                                                All Rights Reserved.
+ * Copyright (C) 2011-2012 Brian P. Hinz
+ * Copyright (C) 2010 TigerVNC Team
+ * Copyright (C) 2002-2005 RealVNC Ltd.  All Rights Reserved.
  *
  * This is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -26,10 +26,10 @@ import com.turbovnc.rdr.ErrorException;
 
 public class SecurityClient {
 
-  public CSecurity getCSecurity(Options opts, int secType) {
+  public CSecurity getCSecurity(Params params, int secType) {
     assert (msg != null);
 
-    if (!opts.isSecTypeSupported(secType))
+    if (!params.secTypes.isSupported(secType))
       throw new ErrorException("Security type not supported");
 
     switch (secType) {
@@ -39,7 +39,6 @@ public class SecurityClient {
       case RFB.SECTYPE_TLS:       return (new CSecurityRFBTLS(this));
       case RFB.SECTYPE_VENCRYPT:  return (new CSecurityVeNCrypt(this));
       case RFB.SECTYPE_PLAIN:     return (new CSecurityPlain());
-      case RFB.SECTYPE_IDENT:     return (new CSecurityIdent());
       case RFB.SECTYPE_TLS_NONE:
         return (new CSecurityStack(RFB.SECTYPE_TLS_NONE, "TLSNone",
                 new CSecurityTLS(true), null));
@@ -49,9 +48,6 @@ public class SecurityClient {
       case RFB.SECTYPE_TLS_PLAIN:
         return (new CSecurityStack(RFB.SECTYPE_TLS_PLAIN, "TLSPlain",
                 new CSecurityTLS(true), new CSecurityPlain()));
-      case RFB.SECTYPE_TLS_IDENT:
-        return (new CSecurityStack(RFB.SECTYPE_TLS_IDENT, "TLSIdent",
-                new CSecurityTLS(true), new CSecurityIdent()));
       case RFB.SECTYPE_X509_NONE:
         return (new CSecurityStack(RFB.SECTYPE_X509_NONE, "X509None",
                 new CSecurityTLS(false), null));
@@ -61,9 +57,6 @@ public class SecurityClient {
       case RFB.SECTYPE_X509_PLAIN:
         return (new CSecurityStack(RFB.SECTYPE_X509_PLAIN, "X509Plain",
                 new CSecurityTLS(false), new CSecurityPlain()));
-      case RFB.SECTYPE_X509_IDENT:
-        return (new CSecurityStack(RFB.SECTYPE_X509_IDENT, "X509Ident",
-                new CSecurityTLS(false), new CSecurityIdent()));
       default:
         throw new ErrorException("Security type not supported");
     }

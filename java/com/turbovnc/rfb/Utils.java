@@ -1,6 +1,6 @@
-/* Copyright (C) 2012 Brian P. Hinz
- * Copyright (C) 2012, 2015, 2018, 2020, 2022 D. R. Commander.
- *                                            All Rights Reserved.
+/* Copyright (C) 2012, 2015, 2018, 2020, 2022-2025 D. R. Commander.
+ *                                                 All Rights Reserved.
+ * Copyright (C) 2012 Brian P. Hinz
  *
  * This is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -24,10 +24,16 @@ import javax.swing.filechooser.FileSystemView;
 
 public final class Utils {
 
-  public static final int JAVA_VERSION =
-    Integer.parseInt(System.getProperty("java.version").split("\\.")[0]) <= 1 ?
-    Integer.parseInt(System.getProperty("java.version").split("\\.")[1]) :
-    Integer.parseInt(System.getProperty("java.version").split("\\.")[0]);
+  private static int getJavaVersion() {
+    String javaVersionString = System.getProperty("java.version");
+    javaVersionString = javaVersionString.split("-")[0];
+    String[] javaVersionStrings = javaVersionString.split("\\.");
+    int majorVersion = Integer.parseInt(javaVersionStrings[0]);
+    return (majorVersion <= 1 && javaVersionStrings.length > 1 ?
+            Integer.parseInt(javaVersionStrings[1]) : majorVersion);
+  }
+
+  public static final int JAVA_VERSION = getJavaVersion();
 
   private static final String OS = System.getProperty("os.name").toLowerCase();
 
@@ -51,6 +57,12 @@ public final class Utils {
     return !isMac();
   }
 
+  private static native boolean displaysHaveSeparateSpaces();
+
+  public static boolean displaysHaveSeparateSpacesHelper() {
+    return isMac() && (!Helper.isAvailable() || displaysHaveSeparateSpaces());
+  }
+
   public static boolean getBooleanProperty(String key, boolean def) {
     String prop = System.getProperty(key, def ? "True" : "False");
     if (prop != null && prop.length() > 0) {
@@ -68,6 +80,18 @@ public final class Utils {
         return false;
     }
     return def;
+  }
+
+  public static int getIntProperty(String key) {
+    String prop = System.getProperty(key);
+    if (prop != null && prop.length() > 0) {
+      int i = -1;
+      try {
+        i = Integer.parseInt(prop);
+      } catch (NumberFormatException e) {}
+      return i;
+    }
+    return -1;
   }
 
   public static String getFileSeparator() {
@@ -108,6 +132,14 @@ public final class Utils {
 
   public static double getTime() {
     return (double)System.nanoTime() / 1.0e9;
+  }
+
+  public static String convertCRLF(String buf) {
+    return convertLF(buf).replaceAll("\\n", "\r\n");
+  }
+
+  public static String convertLF(String buf) {
+    return buf.replaceAll("\\r\\n?", "\n");
   }
 
   private Utils() {}

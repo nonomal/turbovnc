@@ -23,13 +23,14 @@
 	<key>CFBundleIconFile</key>
 	<string>turbovnc.icns</string>
 	<key>LSMinimumSystemVersion</key>
-	<string>10.7.0</string>
+	<string>@MINSYSVERSION@</string>
 	<key>CFBundleDocumentTypes</key>
 	<array>
 		<dict>
 			<key>CFBundleTypeExtensions</key>
 			<array>
 				<string>vnc</string>
+				<string>turbovnc</string>
 			</array>
 			<key>CFBundleTypeIconFile</key>
 			<string>vncviewer.icns</string>
@@ -45,5 +46,7 @@
 	<array>
 		<string>-server</string>@EAWT_ADD_MODULES@
 	</array>
+	<key>NSHighResolutionCapable</key>
+	<true/>
 </dict>
 </plist>
